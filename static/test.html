@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"/></head>
+<body>
+<div id="out"></div>
+<script>
+fetch('/').then(r=>r.text()).then(html=>{
+  // Extract script content
+  const m = html.match(/<script type="text\/babel"[^>]*>([\s\S]*?)<\/script>/);
+  if(!m){document.getElementById('out').textContent='No script found';return;}
+  // Try to compile with Babel
+  const script = document.createElement('script');
+  script.src = 'https://unpkg.com/@babel/standalone/babel.min.js';
+  script.onload = ()=>{
+    try{
+      Babel.transform(m[1],{presets:['react']});
+      document.getElementById('out').textContent='JSX OK - no syntax errors';
+    }catch(e){
+      document.getElementById('out').innerHTML='<pre style="color:red">'+e.message+'</pre>';
+    }
+  };
+  document.head.appendChild(script);
+});
+</script>
+</body></html>

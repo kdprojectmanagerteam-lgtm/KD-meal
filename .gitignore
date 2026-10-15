@@ -1,0 +1,8 @@
+__pycache__/
+*.db
+*.log
+.claude/
+_*.py
+_*.txt
+deployed_check.html
+config.ini
