@@ -429,8 +429,8 @@ const App = () => {
       idleTimerRef.current = setTimeout(() => {
         const savedFloor = empInfoRef.current.floor;
         if (savedFloor) localStorage.setItem('_idleFloor', savedFloor);
-        handleLogoutRef.current();
         setIdleLogoutMsg('閒置超過 10 分鐘，已自動登出\nSession timed out after 10 minutes of inactivity');
+        handleLogoutRef.current();
       }, IDLE_TIMEOUT);
     };
     const events = ['mousedown','keydown','touchstart','scroll'];
