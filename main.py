@@ -347,8 +347,20 @@ def list_employees(keyword: str = "", is_admin: int | None = None, db: Session =
         query = query.order_by(exact_first, Employee.account_id)
     else:
         query = query.order_by(Employee.account_id)
-    return [{"account_id": e.account_id, "name": e.name, "dept_code": e.dept_code, "is_admin": bool(e.is_admin)}
-            for e in query.limit(limit).all()]
+    employees = query.limit(limit).all()
+    result = []
+    for e in employees:
+        last_order = db.query(Order.floor).filter(
+            Order.emp_id == e.account_id,
+            Order.floor != None,
+            Order.floor != '',
+        ).order_by(Order.id.desc()).first()
+        result.append({
+            "account_id": e.account_id, "name": e.name,
+            "dept_code": e.dept_code, "is_admin": bool(e.is_admin),
+            "last_floor": last_order.floor if last_order else "",
+        })
+    return result
 
 
 @app.post("/api/admin/set-admin")
@@ -2330,6 +2342,176 @@ def export_dinner_detail(month: str, db: Session = Depends(get_db)):
     start_mmdd = start_date[5:].replace("-", "")
     end_mmdd = end_date[5:].replace("-", "")
     filename = f"晚餐明細(會計)_{start_mmdd}-{end_mmdd}.xlsx"
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"},
+    )
+
+
+@app.get("/api/export/guest-detail")
+def export_guest_detail(month: str, db: Session = Depends(get_db)):
+    """匯出來客/廠商明細 - 薪資週期：上月26~本月25"""
+    from urllib.parse import quote
+    import re
+
+    year = int(month.split("-")[0])
+    mon = int(month.split("-")[1])
+
+    if mon == 1:
+        start_date = f"{year-1}-12-21"
+    else:
+        start_date = f"{year}-{str(mon-1).zfill(2)}-21"
+    end_date = f"{year}-{str(mon).zfill(2)}-20"
+
+    orders = db.query(Order).filter(
+        Order.date >= start_date,
+        Order.date <= end_date,
+        Order.company_name != None,
+        Order.company_name != "",
+    ).order_by(Order.date, Order.type, Order.guest_dept, Order.company_name).all()
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "來客廠商明細"
+
+    from openpyxl.styles import Font, Alignment, Border, Side, PatternFill
+
+    thin = Side(style="thin")
+    border_all = Border(left=thin, right=thin, top=thin, bottom=thin)
+    header_font = Font(bold=True, size=11)
+    header_fill = PatternFill(start_color="D9E1F2", end_color="D9E1F2", fill_type="solid")
+
+    type_fills = {
+        "午餐": PatternFill(start_color="E8F5E9", end_color="E8F5E9", fill_type="solid"),
+        "晚餐": PatternFill(start_color="F3E5F5", end_color="F3E5F5", fill_type="solid"),
+        "飲料": PatternFill(start_color="FFF8E1", end_color="FFF8E1", fill_type="solid"),
+    }
+
+    headers = ["日期", "餐別", "部門", "廠商名稱", "品項", "數量", "單價", "小計", "樓層", "代訂人"]
+    for c, h in enumerate(headers, 1):
+        cell = ws.cell(1, c, h)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = Alignment(horizontal="center")
+        cell.border = border_all
+
+    row_idx = 2
+    total_amount = 0
+    for o in orders:
+        d_parts = o.date.split("-")
+        date_str = f"{int(d_parts[1])}月{int(d_parts[2])}日"
+        subtotal = o.price * o.qty
+        total_amount += subtotal
+        row_fill = type_fills.get(o.type)
+
+        ws.cell(row_idx, 1, date_str).border = border_all
+        ws.cell(row_idx, 2, o.type).border = border_all
+        ws.cell(row_idx, 3, o.guest_dept or "").border = border_all
+        ws.cell(row_idx, 4, o.company_name or "").border = border_all
+        ws.cell(row_idx, 5, o.item_name or "").border = border_all
+        c6 = ws.cell(row_idx, 6, o.qty)
+        c6.border = border_all
+        c6.alignment = Alignment(horizontal="center")
+        c7 = ws.cell(row_idx, 7, o.price)
+        c7.border = border_all
+        c7.number_format = '#,##0'
+        c8 = ws.cell(row_idx, 8, subtotal)
+        c8.border = border_all
+        c8.number_format = '#,##0'
+        ws.cell(row_idx, 9, o.floor or "").border = border_all
+        ws.cell(row_idx, 10, o.proxy_by or "").border = border_all
+
+        if row_fill:
+            for col in range(1, 11):
+                ws.cell(row_idx, col).fill = row_fill
+        row_idx += 1
+
+    # 合計行
+    if orders:
+        ws.cell(row_idx, 7, "合計").border = border_all
+        ws.cell(row_idx, 7).font = Font(bold=True)
+        ws.cell(row_idx, 7).alignment = Alignment(horizontal="center")
+        c_total = ws.cell(row_idx, 8, total_amount)
+        c_total.border = border_all
+        c_total.font = Font(bold=True)
+        c_total.number_format = '#,##0'
+
+    # 右側統計欄（L~O）：按日期+部門彙總
+    from collections import OrderedDict
+    stats = OrderedDict()
+    for o in orders:
+        d_parts = o.date.split("-")
+        date_str = f"{int(d_parts[1])}月{int(d_parts[2])}日"
+        dept = o.guest_dept or o.company_name or ""
+        key = (o.date, date_str, dept)
+        if key not in stats:
+            stats[key] = {"qty": 0, "amount": 0}
+        stats[key]["qty"] += o.qty
+        stats[key]["amount"] += o.price * o.qty
+
+    stat_col = 12  # L欄
+    stat_headers = ["日期", "部門", "數量", "金額小計"]
+    summary_fill = PatternFill(start_color="FFF3E0", end_color="FFF3E0", fill_type="solid")
+    for c, h in enumerate(stat_headers):
+        cell = ws.cell(1, stat_col + c, h)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = Alignment(horizontal="center")
+        cell.border = border_all
+
+    s_row = 2
+    stat_total_qty = 0
+    stat_total_amt = 0
+    for (raw_date, date_str, dept), v in stats.items():
+        ws.cell(s_row, stat_col, date_str).border = border_all
+        ws.cell(s_row, stat_col + 1, dept).border = border_all
+        c_qty = ws.cell(s_row, stat_col + 2, v["qty"])
+        c_qty.border = border_all
+        c_qty.alignment = Alignment(horizontal="center")
+        c_amt = ws.cell(s_row, stat_col + 3, v["amount"])
+        c_amt.border = border_all
+        c_amt.number_format = '#,##0'
+        for cc in range(stat_col, stat_col + 4):
+            ws.cell(s_row, cc).fill = summary_fill
+        stat_total_qty += v["qty"]
+        stat_total_amt += v["amount"]
+        s_row += 1
+
+    if stats:
+        ws.cell(s_row, stat_col, "合計").border = border_all
+        ws.cell(s_row, stat_col).font = Font(bold=True)
+        ws.cell(s_row, stat_col + 1).border = border_all
+        c_tq = ws.cell(s_row, stat_col + 2, stat_total_qty)
+        c_tq.border = border_all
+        c_tq.font = Font(bold=True)
+        c_tq.alignment = Alignment(horizontal="center")
+        c_ta = ws.cell(s_row, stat_col + 3, stat_total_amt)
+        c_ta.border = border_all
+        c_ta.font = Font(bold=True)
+        c_ta.number_format = '#,##0'
+
+    ws.column_dimensions["A"].width = 10
+    ws.column_dimensions["B"].width = 8
+    ws.column_dimensions["C"].width = 14
+    ws.column_dimensions["D"].width = 14
+    ws.column_dimensions["E"].width = 50
+    ws.column_dimensions["F"].width = 6
+    ws.column_dimensions["G"].width = 8
+    ws.column_dimensions["H"].width = 10
+    ws.column_dimensions["I"].width = 8
+    ws.column_dimensions["J"].width = 10
+    ws.column_dimensions["L"].width = 10
+    ws.column_dimensions["M"].width = 14
+    ws.column_dimensions["N"].width = 8
+    ws.column_dimensions["O"].width = 12
+
+    buf = BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    start_mmdd = start_date[5:].replace("-", "")
+    end_mmdd = end_date[5:].replace("-", "")
+    filename = f"來客廠商明細_{start_mmdd}-{end_mmdd}.xlsx"
     return StreamingResponse(
         buf,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
