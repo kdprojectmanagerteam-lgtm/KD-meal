@@ -6,7 +6,7 @@
   <meta http-equiv="Pragma" content="no-cache" />
   <meta http-equiv="Expires" content="0" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>總部訂餐專區 Meal Ordering</title>
+  <title>總部訂餐專區</title>
   <script src="/static/tailwindcss.js"></script>
   <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
@@ -100,6 +100,19 @@ const api = {
   copyMeetingAttendees: (id, sourceId) => request('/meetings/' + id + '/copy-attendees/' + sourceId, { method: 'POST' }),
   checkMeetingDinner: (id) => request('/meetings/' + id + '/check'),
   notifyMeetingDinner: (id) => request('/meetings/' + id + '/notify', { method: 'POST' }),
+  // Uniform
+  applyUniform: (d) => request('/uniform/apply', { method: 'POST', body: JSON.stringify(d) }),
+  getUniformApps: (p={}) => { const qs=new URLSearchParams(Object.entries(p).filter(([,v])=>v!=null&&v!=='')).toString(); return request('/uniform/applications'+(qs?'?'+qs:'')); },
+  updateUniformApp: (id, d) => request('/uniform/applications/' + id, { method: 'PUT', body: JSON.stringify(d) }),
+  receiveUniform: (id) => request('/uniform/applications/' + id + '/receive', { method: 'PUT' }),
+  getUniformSizes: () => request('/uniform/sizes'),
+  getUniformInventory: (p={}) => { const qs=new URLSearchParams(Object.entries(p).filter(([,v])=>v!=null&&v!=='')).toString(); return request('/uniform/inventory'+(qs?'?'+qs:'')); },
+  adjustInventory: (id, qty, reason, operator) => request('/uniform/inventory/'+id+'/adjust?change_qty='+qty+'&reason='+encodeURIComponent(reason)+'&operator='+encodeURIComponent(operator), { method: 'POST' }),
+  getPurchaseAlert: () => request('/uniform/purchase-alert'),
+  getMyUniformRole: (empId) => request('/uniform/my-role?emp_id='+encodeURIComponent(empId)),
+  getUniformRoles: () => request('/uniform/roles'),
+  createUniformRole: (d) => request('/uniform/roles', { method: 'POST', body: JSON.stringify(d) }),
+  deleteUniformRole: (id) => request('/uniform/roles/' + id, { method: 'DELETE' }),
 };
 
 // --- Utils ---
@@ -139,6 +152,27 @@ const CountdownBadge = ({ deadline }) => {
 
 // --- App ---
 const App = () => {
+  const showUniformZone = /sit|localhost|127\.0\.0\.1/.test(window.location.hostname);
+  const [activeZone, setActiveZone] = useState(()=>sessionStorage.getItem('_zone')||'meal');
+  // Uniform state
+  const [uniformTab, setUniformTab] = useState(()=>sessionStorage.getItem('_uniformTab')||'apply');
+  const [uniformStep, setUniformStep] = useState(1);
+  const [uniformForm, setUniformForm] = useState({location:'',height:'',weight:'',chest:'',shoulder:'',gender:'male',recommendedSize:'',selectedSize:'',uniformType:'',longSleeveQty:0,shortSleeveQty:0,outerwearSize:''});
+  const [uniformApps, setUniformApps] = useState([]);
+  const [uniformSizes, setUniformSizes] = useState([]);
+  const [uniformSubmitting, setUniformSubmitting] = useState(false);
+  const [uniformAdminTab, setUniformAdminTab] = useState('applications');
+  const [uniformAllApps, setUniformAllApps] = useState([]);
+  const [uniformInventory, setUniformInventory] = useState([]);
+  const [uniformAlerts, setUniformAlerts] = useState([]);
+  const [uniformRole, setUniformRole] = useState('employee');  // employee/hr/local_admin/warehouse/super_admin
+  const [uniformAllRoles, setUniformAllRoles] = useState([]);
+  const [uniformRoleSearch, setUniformRoleSearch] = useState('');
+  const [uniformRoleResults, setUniformRoleResults] = useState([]);
+  const [uniformRoleShowList, setUniformRoleShowList] = useState(false);
+  const [uniformNewRole, setUniformNewRole] = useState('hr');
+  const [uniformNewLoc, setUniformNewLoc] = useState('');
+  const [uniformAdminSearch, setUniformAdminSearch] = useState('');
   const [activeTab, setActiveTab] = useState(()=>sessionStorage.getItem('_tab')||'order');
   const [adminSubTab, setAdminSubTab] = useState(()=>sessionStorage.getItem('_subTab')||'batchImport');
   const [sysSettingsTab, setSysSettingsTab] = useState('access');
@@ -443,7 +477,7 @@ const App = () => {
   }, [loggedIn]);
 
   useEffect(() => { setImportSettings(p => ({...p, deadline: getDefaultDeadline(p.date, p.type)})); }, [importSettings.date, importSettings.type]);
-  useEffect(() => { sessionStorage.setItem('_tab', activeTab); sessionStorage.setItem('_subTab', adminSubTab); }, [activeTab, adminSubTab]);
+  useEffect(() => { sessionStorage.setItem('_zone', activeZone); sessionStorage.setItem('_tab', activeTab); sessionStorage.setItem('_subTab', adminSubTab); sessionStorage.setItem('_uniformTab', uniformTab); document.title = activeZone==='uniform' ? '制服申領專區' : '總部訂餐專區'; }, [activeZone, activeTab, adminSubTab, uniformTab]);
   useEffect(() => { const td=new Date().toISOString().slice(0,10); if (loggedIn && (td==='2026-08-04'||td==='2026-08-05') && !localStorage.getItem('announcement_read_'+td)) setShowAnnouncement(true); }, []);
   const reloadPage = () => { sessionStorage.setItem('_tab', activeTab); sessionStorage.setItem('_subTab', adminSubTab); sessionStorage.setItem('_expenseDate', expenseDate); location.reload(); };
 
@@ -518,6 +552,27 @@ const App = () => {
     if (reviewFilter.vendor) p.vendor = reviewFilter.vendor;
     api.getReviews(p).then(setAdminReviews).catch(()=>{});
   }, [activeTab, adminSubTab, reviewFilter]);
+
+  // 制服申領 - 載入角色和資料
+  useEffect(() => {
+    if (!loggedIn || activeZone !== 'uniform' || !empInfo.id) return;
+    api.getMyUniformRole(empInfo.id).then(r=>setUniformRole(r.role||'employee')).catch(()=>{});
+  }, [loggedIn, activeZone, empInfo.id]);
+
+  useEffect(() => {
+    if (!loggedIn || activeZone !== 'uniform') return;
+    api.getUniformApps({ emp_id: empInfo.id }).then(setUniformApps).catch(()=>{});
+    api.getUniformSizes().then(setUniformSizes).catch(()=>{});
+  }, [loggedIn, activeZone, uniformTab]);
+
+  // 制服後台 - 載入資料
+  useEffect(() => {
+    if (!loggedIn || activeZone !== 'uniform' || uniformTab !== 'admin') return;
+    if (['applications','shipping','history_all','shortage','overview'].includes(uniformAdminTab)) api.getUniformApps({}).then(setUniformAllApps).catch(()=>{});
+    if (['inventory','overview'].includes(uniformAdminTab)) api.getUniformInventory({}).then(setUniformInventory).catch(()=>{});
+    if (uniformAdminTab === 'alerts') api.getPurchaseAlert().then(setUniformAlerts).catch(()=>{});
+    if (uniformAdminTab === 'permissions') api.getUniformRoles().then(setUniformAllRoles).catch(()=>{});
+  }, [loggedIn, activeZone, uniformTab, uniformAdminTab]);
 
   // 會議訂餐檢查 - 載入會議列表
   useEffect(() => {
@@ -1132,11 +1187,23 @@ const App = () => {
   if (!loggedIn) return (
     <div className="min-h-screen bg-slate-50 flex items-center justify-center">
       <div className="bg-white p-8 rounded-3xl border shadow-sm w-full max-w-sm space-y-6">
+        {showUniformZone ? (<>
+        <div className="text-center">
+          <span className="text-4xl">{'\u{1F464}'}</span>
+          <h1 className="font-black text-2xl text-blue-900 mt-2">員工專屬入口</h1>
+          <p className="text-sm text-slate-500 mt-1">Employee Portal</p>
+        </div>
+        <div className="flex gap-2">
+          <button onClick={()=>setActiveZone('meal')} className={'flex-1 py-3 rounded-xl font-black transition-all '+(activeZone==='meal'?'bg-blue-900 text-white shadow':'bg-slate-100 text-slate-400 hover:text-slate-600')}><span className="text-sm">{'\u{1F37D}'} 訂餐專區</span><br/><span className="text-xs font-bold opacity-70">Meal Ordering</span></button>
+          <button onClick={()=>setActiveZone('uniform')} className={'flex-1 py-3 rounded-xl font-black transition-all '+(activeZone==='uniform'?'bg-blue-900 text-white shadow':'bg-slate-100 text-slate-400 hover:text-slate-600')}><span className="text-sm">{'\u{1F454}'} 制服申領專區</span><br/><span className="text-xs font-bold opacity-70">Uniform Application</span></button>
+        </div>
+        </>) : (
         <div className="text-center">
           <span className="text-4xl">{'\u{1F37D}'}</span>
           <h1 className="font-black text-2xl text-blue-900 mt-2">總部訂餐專區</h1>
           <p className="text-sm text-slate-500 mt-1">Meal Ordering System</p>
         </div>
+        )}
         {loginStep===1 && (<div className="space-y-4">
           <div>
             <label className="text-base font-black text-slate-700 block mb-1.5">員工工號 Employee ID</label>
@@ -1162,7 +1229,7 @@ const App = () => {
           {idleLogoutMsg && <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-center"><p className="text-amber-700 text-sm font-bold whitespace-pre-line">{idleLogoutMsg}</p></div>}
           {loginError && <p className="text-red-500 text-sm font-bold whitespace-pre-line">{loginError}</p>}
           <button onClick={handleLogin} disabled={loginLoading} className="w-full py-3 bg-blue-600 text-white rounded-xl font-black text-base hover:bg-blue-700 transition-colors disabled:opacity-50">
-            {loginLoading ? '登入中...' : '登入 Login'}
+            {loginLoading ? '登入中...' : '登入系統 Login'}
           </button>
           <div className="text-center">
             <button onClick={()=>{setLoginStep(5);setLoginError('');setForgotPwdId('');setForgotPwdName('');setForgotSuccess('');}} className="text-sm text-blue-500 font-bold hover:underline">忘記密碼？ Forgot Password?</button>
@@ -1237,6 +1304,7 @@ const App = () => {
   return (
     <div className="min-h-screen bg-slate-50 text-slate-700 font-sans">
       <AnnouncementModal />
+      {activeZone==='meal' && <>
       {/* 桌面版頂部導覽 */}
       <nav className="hidden md:flex bg-white/80 backdrop-blur-md border-b sticky top-0 z-40 px-6 h-16 items-center justify-between">
         <div className="flex items-center gap-2 shrink-0 mr-4">
@@ -4095,7 +4163,7 @@ const App = () => {
                             const isMatch = (o) => f&&f.value && (f.type==='item' ? o.item_name===f.value : (o.vendor||'')===f.value);
                             const hasMatch = dayOrders.some(isMatch);
                             return <td key={dt} className={'px-3 py-2 text-center'+(hasMatch?' bg-orange-50':'')}>
-                              {(()=>{const filtered = f&&f.value ? dayOrders.filter(isMatch) : dayOrders; const isPast = dt < localDateStr(); return filtered.length>0 ? filtered.map((o,i)=><div key={i} className={'text-xs leading-relaxed '+(isMatch(o)?'font-black text-orange-600':'text-slate-700')}><div className="flex items-center gap-1"><span className="flex-1">{o.item_name}{o.qty>1&&<span className="text-orange-500 font-black"> ×{o.qty}</span>}</span>{o.type==='飲料'?<span className="px-1.5 py-0.5 rounded text-[10px] font-black cursor-pointer shrink-0 bg-yellow-100 text-yellow-700 hover:bg-yellow-200" title="修改加料" onClick={(e)=>{e.stopPropagation();const dOpts=drinkOptions.find(x=>x.date===dt&&x.vendor===o.vendor&&(x.toppings||[]).length>0)||drinkOptions.find(x=>x.date===dt&&(x.toppings||[]).length>0);const toppings=(dOpts?dOpts.toppings:[])||[];const remarkParts=(o.remarks||'').split(' / ').filter(Boolean);const firstPart=remarkParts[0]||'';const hasTpPrefix=firstPart.startsWith('加料:');const tpStr=hasTpPrefix?firstPart.replace(/^加料:/,''):firstPart;const currentToppings=toppings.filter(x=>tpStr.includes(x.name)).map(x=>x.name);const hasToppingsInFirst=currentToppings.length>0;const initTpTotal=currentToppings.reduce((s,n)=>{const t=toppings.find(x=>x.name===n);return s+(t?t.price:0);},0);const basePrice=o.price-initTpTotal;setEditingDrinkOrder(Object.assign({},o,{emp_name:emp.emp_name,allToppings:toppings,currentToppings:currentToppings,remarkParts:remarkParts,basePrice:basePrice,hasToppingsInFirst:hasToppingsInFirst}));}}>✏</span>:null}{(o.type==='午餐'||o.type==='晚餐')&&<button onClick={(e)=>{e.stopPropagation();setEditingOrderRemarks({id:o.id,emp_name:emp.emp_name,item_name:o.item_name,remarks:o.remarks||'',date:dt,type:o.type});}} className={'px-1.5 py-0.5 rounded text-[10px] font-black cursor-pointer shrink-0 '+(o.remarks?'bg-green-100 text-green-700 hover:bg-green-200':'bg-slate-100 text-slate-400 hover:bg-slate-200')} title="修改備註">📝</button>}{o.type==='晚餐'&&!o.company_paid&&<button onClick={async(e)=>{e.stopPropagation();if(!confirm('確定要將 '+emp.emp_name+' 的「'+o.item_name+'」從'+(o.self_paid?'自費':'加班')+'改為'+(o.self_paid?'加班':'自費')+'？'))return;const newVal=o.self_paid?0:1;await api.updateOrder(o.id,{self_paid:newVal});reloadWeekly();}} className={'px-1.5 py-0.5 rounded text-[10px] font-black cursor-pointer shrink-0 '+(o.self_paid?'bg-orange-100 text-orange-600 hover:bg-orange-200':'bg-blue-100 text-blue-600 hover:bg-blue-200')}>{o.self_paid?'自費':'加班'}</button>}{!isPast&&<button onClick={async(e)=>{e.stopPropagation();if(!confirm('確定要刪除 '+emp.emp_name+' 的「'+o.item_name+'」？'))return;await api.deleteOrder(o.id);reloadWeekly();}} className="text-red-300 hover:text-red-500 shrink-0" title="刪除"><Icon name="x" size={12}/></button>}</div>{o.type==='飲料'&&o.remarks&&<p className="text-xs text-orange-500 mt-0.5">{o.remarks}</p>}{(o.type==='午餐'||o.type==='晚餐')&&o.remarks&&<p className="text-xs text-green-600 mt-0.5">{o.remarks}</p>}</div>) : <span className="text-slate-200">-</span>;})()}
+                              {(()=>{const filtered = f&&f.value ? dayOrders.filter(isMatch) : dayOrders; const isPast = dt < localDateStr(); return filtered.length>0 ? filtered.map((o,i)=><div key={i} className={'text-xs leading-relaxed '+(isMatch(o)?'font-black text-orange-600':'text-slate-700')}><div className="flex items-center gap-1"><span className="flex-1">{o.item_name}{o.qty>1&&<span className="text-orange-500 font-black"> ×{o.qty}</span>}</span>{o.type==='早餐'?<button onClick={(e)=>{e.stopPropagation();setEditingOrder({id:o.id,item_name:o.item_name,qty:o.qty,price:o.price,remarks:o.remarks||'',type:o.type,company_paid:o.company_paid,self_paid:o.self_paid,_reloadWeekly:true});}} className={'px-1.5 py-0.5 rounded text-[10px] font-black cursor-pointer shrink-0 '+(o.remarks?'bg-green-100 text-green-700 hover:bg-green-200':'bg-slate-100 text-slate-400 hover:bg-slate-200')} title="修改備註/金額">📝</button>:null}{o.type==='飲料'?<span className="px-1.5 py-0.5 rounded text-[10px] font-black cursor-pointer shrink-0 bg-yellow-100 text-yellow-700 hover:bg-yellow-200" title="修改加料" onClick={(e)=>{e.stopPropagation();const dOpts=drinkOptions.find(x=>x.date===dt&&x.vendor===o.vendor&&(x.toppings||[]).length>0)||drinkOptions.find(x=>x.date===dt&&(x.toppings||[]).length>0);const toppings=(dOpts?dOpts.toppings:[])||[];const remarkParts=(o.remarks||'').split(' / ').filter(Boolean);const firstPart=remarkParts[0]||'';const hasTpPrefix=firstPart.startsWith('加料:');const tpStr=hasTpPrefix?firstPart.replace(/^加料:/,''):firstPart;const currentToppings=toppings.filter(x=>tpStr.includes(x.name)).map(x=>x.name);const hasToppingsInFirst=currentToppings.length>0;const initTpTotal=currentToppings.reduce((s,n)=>{const t=toppings.find(x=>x.name===n);return s+(t?t.price:0);},0);const basePrice=o.price-initTpTotal;setEditingDrinkOrder(Object.assign({},o,{emp_name:emp.emp_name,allToppings:toppings,currentToppings:currentToppings,remarkParts:remarkParts,basePrice:basePrice,hasToppingsInFirst:hasToppingsInFirst}));}}>✏</span>:null}{(o.type==='午餐'||o.type==='晚餐')&&<button onClick={(e)=>{e.stopPropagation();setEditingOrderRemarks({id:o.id,emp_name:emp.emp_name,item_name:o.item_name,remarks:o.remarks||'',date:dt,type:o.type});}} className={'px-1.5 py-0.5 rounded text-[10px] font-black cursor-pointer shrink-0 '+(o.remarks?'bg-green-100 text-green-700 hover:bg-green-200':'bg-slate-100 text-slate-400 hover:bg-slate-200')} title="修改備註">📝</button>}{o.type==='晚餐'&&!o.company_paid&&<button onClick={async(e)=>{e.stopPropagation();if(!confirm('確定要將 '+emp.emp_name+' 的「'+o.item_name+'」從'+(o.self_paid?'自費':'加班')+'改為'+(o.self_paid?'加班':'自費')+'？'))return;const newVal=o.self_paid?0:1;await api.updateOrder(o.id,{self_paid:newVal});reloadWeekly();}} className={'px-1.5 py-0.5 rounded text-[10px] font-black cursor-pointer shrink-0 '+(o.self_paid?'bg-orange-100 text-orange-600 hover:bg-orange-200':'bg-blue-100 text-blue-600 hover:bg-blue-200')}>{o.self_paid?'自費':'加班'}</button>}{!isPast&&<button onClick={async(e)=>{e.stopPropagation();if(!confirm('確定要刪除 '+emp.emp_name+' 的「'+o.item_name+'」？'))return;await api.deleteOrder(o.id);reloadWeekly();}} className="text-red-300 hover:text-red-500 shrink-0" title="刪除"><Icon name="x" size={12}/></button>}</div>{o.type==='飲料'&&o.remarks&&<p className="text-xs text-orange-500 mt-0.5">{o.remarks}</p>}{(o.type==='午餐'||o.type==='晚餐'||o.type==='早餐')&&o.remarks&&<p className="text-xs text-green-600 mt-0.5">{o.remarks}</p>}</div>) : <span className="text-slate-200">-</span>;})()}
                             </td>;
                           })}
                         </tr>);
@@ -5055,10 +5123,43 @@ const App = () => {
             <div className="p-8 border-b bg-slate-50 flex justify-between items-center"><h3 className="text-xl font-black text-slate-700">編輯訂單紀錄</h3><button onClick={()=>setEditingOrder(null)} className="text-slate-400 hover:text-slate-700"><Icon name="x" size={20}/></button></div>
             <div className="p-8 space-y-4">
               <div className="space-y-1"><label className="text-[10px] font-black text-slate-400 uppercase">品項名稱</label><input type="text" value={editingOrder.item_name} onChange={e=>setEditingOrder({...editingOrder,item_name:e.target.value})} className="w-full p-3 bg-slate-50 rounded-xl font-bold outline-none"/></div>
+              {(()=>{
+                const remarkParts = (editingOrder.remarks||'').split(' / ').filter(Boolean);
+                const addonTotal = remarkParts.reduce((s,p)=>{const m=p.match(/\+\$(\d+)/);return s+(m?parseInt(m[1]):0);},0);
+                const basePrice = editingOrder.price - addonTotal;
+                return <>
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-1"><label className="text-[10px] font-black text-slate-400 uppercase">數量</label><input type="number" value={editingOrder.qty} onChange={e=>setEditingOrder({...editingOrder,qty:parseInt(e.target.value)||1})} className="w-full p-3 bg-slate-50 rounded-xl font-bold outline-none"/></div>
-                <div className="space-y-1"><label className="text-[10px] font-black text-slate-400 uppercase">單價</label><input type="number" value={editingOrder.price} onChange={e=>setEditingOrder({...editingOrder,price:parseInt(e.target.value)||0})} className="w-full p-3 bg-slate-50 rounded-xl font-bold outline-none"/></div>
+                <div className="space-y-1"><label className="text-[10px] font-black text-slate-400 uppercase">品項單價</label><div className="p-3 bg-slate-50 rounded-xl font-bold text-slate-700">${basePrice}</div></div>
               </div>
+              <div className="space-y-1"><label className="text-[10px] font-black text-slate-400 uppercase">加料 / 套餐</label>
+                {remarkParts.length > 0 ? (
+                  <div className="flex flex-wrap gap-2 p-3 bg-slate-50 rounded-xl min-h-[44px]">
+                    {remarkParts.map((part,idx)=>{
+                      const priceMatch = part.match(/\+\$(\d+)/);
+                      const addonPrice = priceMatch ? parseInt(priceMatch[1]) : 0;
+                      return <span key={idx} className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white border rounded-lg text-sm font-bold text-slate-700 shadow-sm">
+                        {part.trim()}
+                        <button onClick={()=>{
+                          const parts = (editingOrder.remarks||'').split(' / ').filter(Boolean);
+                          parts.splice(idx, 1);
+                          const newRemarks = parts.join(' / ');
+                          const newPrice = addonPrice ? editingOrder.price - addonPrice : editingOrder.price;
+                          setEditingOrder({...editingOrder, remarks: newRemarks, price: Math.max(0, newPrice)});
+                        }} className="w-4 h-4 rounded-full bg-red-100 text-red-500 hover:bg-red-200 flex items-center justify-center text-xs font-black">{'\u2715'}</button>
+                      </span>;
+                    })}
+                  </div>
+                ) : (
+                  <div className="p-3 bg-slate-50 rounded-xl text-sm text-slate-300">無加料</div>
+                )}
+              </div>
+              <div className="p-3 bg-blue-50 rounded-xl flex justify-between items-center">
+                <span className="text-sm font-black text-slate-500">總金額</span>
+                <span className="text-lg font-black text-blue-900">${editingOrder.price}</span>
+              </div>
+                </>;
+              })()}
               {editingOrder.type==='晚餐' && !editingOrder.company_paid && (
               <div className="space-y-1">
                 <label className="text-[10px] font-black text-slate-400 uppercase">自費/加班</label>
@@ -5070,7 +5171,7 @@ const App = () => {
             </div>
             <div className="p-8 border-t bg-slate-50/50 flex gap-3">
               <button onClick={()=>setEditingOrder(null)} className="flex-1 py-4 bg-white border rounded-2xl font-black text-slate-400">取消</button>
-              <button onClick={async()=>{const payload={item_name:editingOrder.item_name,qty:editingOrder.qty,price:editingOrder.price};if(editingOrder.type==='晚餐')payload.self_paid=editingOrder.self_paid;const u=await api.updateOrder(editingOrder.id,payload);setAdminOrders(p=>p.map(o=>o.id===u.id?u:o));setEditingOrder(null);}} className="flex-[2] py-4 bg-blue-600 text-white rounded-2xl font-black shadow-lg shadow-blue-100 px-8">儲存修改</button>
+              <button onClick={async()=>{const payload={item_name:editingOrder.item_name,qty:editingOrder.qty,price:editingOrder.price,remarks:editingOrder.remarks||''};if(editingOrder.type==='晚餐')payload.self_paid=editingOrder.self_paid;const u=await api.updateOrder(editingOrder.id,payload);if(editingOrder._reloadWeekly){reloadWeekly();}else{setAdminOrders(p=>p.map(o=>o.id===u.id?u:o));}setEditingOrder(null);}} className="flex-[2] py-4 bg-blue-600 text-white rounded-2xl font-black shadow-lg shadow-blue-100 px-8">儲存修改</button>
             </div>
           </div>
         </div>
@@ -5227,6 +5328,649 @@ const App = () => {
           </div>
         </div>
       )}
+
+      </>}
+      {showUniformZone && activeZone==='uniform' && (()=>{
+        const locations = ['嘉義總部','新北A3','新竹','台中','台南','高雄'];
+        const uf = uniformForm;
+        const setUf = (k,v) => setUniformForm(prev=>({...prev,[k]:v}));
+        const genderSizes = uniformSizes.filter(s=>s.gender===uf.gender);
+        const outerwearSizeLabels = [...new Set(genderSizes.map(s=>s.size_label))].filter(s=>['M','L','XL','2L','3L'].includes(s));
+        const getRecommendedSize = (gender, h, w) => {
+          const all = uniformSizes.filter(s=>s.gender===gender);
+          if (!all.length) return {code:'',label:'M'};
+          const exact = all.filter(s=>h>=s.min_height && h<s.max_height && w>=s.min_weight && w<s.max_weight);
+          if (exact.length) return {code:exact[0].size_code, label:exact[0].size_label};
+          let best = all[0], bestScore = Infinity;
+          all.forEach(s=>{
+            const midH = (s.min_height + Math.min(s.max_height, 220)) / 2;
+            const midW = (s.min_weight + Math.min(s.max_weight, 150)) / 2;
+            const score = Math.abs(h - midH) / 10 + Math.abs(w - midW) / 10;
+            if (score < bestScore) { bestScore = score; best = s; }
+          });
+          return {code:best.size_code, label:best.size_label};
+        };
+        const statusMap = {pending:{label:'待審核',color:'yellow'},approved:{label:'已核准',color:'blue'},shipped:{label:'已出貨',color:'purple'},received:{label:'已簽收',color:'green'}};
+        const handleUniformSubmit = async () => {
+          if (uniformSubmitting) return;
+          const total = uf.longSleeveQty + uf.shortSleeveQty;
+          if (total < 12 && !confirm('您目前只申請了 '+total+' 件，確認是否不需要領滿額度？\nYou are applying for only '+total+' items. Confirm you do not need the full allocation?')) return;
+          setUniformSubmitting(true);
+          try {
+            const isA = uf.uniformType === 'A_shirt';
+            await api.applyUniform({
+              emp_id: empInfo.id, emp_name: empInfo.name, dept_code: empInfo.dept_code||'',
+              location: uf.location, height: parseFloat(uf.height), weight: parseFloat(uf.weight),
+              chest: uf.chest ? parseFloat(uf.chest) : null, shoulder: uf.shoulder ? parseFloat(uf.shoulder) : null,
+              gender: uf.gender, recommended_size: uf.recommendedSize, selected_size: uf.selectedSize,
+              uniform_type: uf.uniformType,
+              long_sleeve_qty: uf.longSleeveQty, short_sleeve_qty: uf.shortSleeveQty,
+              outerwear_type: isA ? 'blazer' : 'jacket', outerwear_qty: isA ? 1 : 2,
+            });
+            alert('申請已送出！Application submitted!');
+            setUniformStep(1);
+            setUniformForm({location:'',height:'',weight:'',chest:'',shoulder:'',gender:'male',recommendedSize:'',selectedSize:'',uniformType:'',longSleeveQty:0,shortSleeveQty:0,outerwearSize:''});
+            setUniformTab('history');
+            api.getUniformApps({emp_id:empInfo.id}).then(setUniformApps).catch(()=>{});
+          } catch(e) { alert('送出失敗：'+e.message); } finally { setUniformSubmitting(false); }
+        };
+        return (<>
+        {/* 頂部導覽 */}
+        <nav className="bg-white/80 backdrop-blur-md border-b sticky top-0 z-40 px-4 md:px-6 h-14 flex items-center justify-between">
+          <span className="font-black text-lg text-blue-900 shrink-0">制服申領專區</span>
+          <div className="flex items-center gap-3 shrink-0">
+            <span className="text-sm font-black text-slate-500 hidden md:inline">{empInfo.name||empInfo.id}</span>
+            <button onClick={handleLogout} className="px-3 py-1.5 text-sm font-black text-slate-400 hover:text-slate-700 transition-colors">登出</button>
+          </div>
+        </nav>
+        <div className="p-4 md:p-6 pb-24 md:pb-6 flex gap-4">
+          {/* 左側選單 */}
+          <div className="w-44 shrink-0 space-y-1.5 sticky top-[72px] self-start">
+            {[{id:'apply',label:'申請制服'},{id:'receive',label:'簽收'},{id:'history',label:'歷史紀錄'},...(uniformRole!=='employee'?[{id:'admin',label:'管理後台'}]:[])].map(t=>(
+              <React.Fragment key={t.id}>
+                <button onClick={()=>{setUniformTab(t.id);if(t.id==='apply')setUniformStep(1);}} className={'w-full text-left px-4 py-3 rounded-xl text-base font-black transition-all relative '+(uniformTab===t.id?'bg-blue-900 text-white shadow':'bg-white text-slate-700 hover:text-slate-900 border')}>{t.label}{t.id==='receive' && uniformApps.filter(a=>a.status==='shipped').length>0 && <span className="absolute top-2 right-2 w-5 h-5 bg-red-500 text-white text-xs font-black rounded-full flex items-center justify-center">{uniformApps.filter(a=>a.status==='shipped').length}</span>}</button>
+                {t.id==='admin' && uniformTab==='admin' && uniformRole!=='employee' && (()=>{
+                  const ur = uniformRole;
+                  const subs = [
+                    ...(['hr','super_admin'].includes(ur)?[{id:'applications',label:'申請清單'},{id:'history_all',label:'歷史紀錄查詢'}]:[]),
+                    ...(['local_admin','super_admin'].includes(ur)?[{id:'shipping',label:'待發貨'}]:[]),
+                    ...(['warehouse','super_admin'].includes(ur)?[{id:'inventory',label:'庫存管理'},{id:'shortage',label:'缺貨調撥'}]:[]),
+                    ...(['procurement','super_admin'].includes(ur)?[{id:'alerts',label:'採購預警'}]:[]),
+                    ...(['general_affairs','super_admin'].includes(ur)?[{id:'overview',label:'據點總覽'}]:[]),
+                    ...(ur==='super_admin'?[{id:'permissions',label:'權限管理'}]:[]),
+                  ];
+                  return <div className="ml-3 mt-1 space-y-1">{subs.map(s=>(
+                    <button key={s.id} onClick={()=>setUniformAdminTab(s.id)} className={'w-full text-left px-3 py-2.5 rounded-lg text-sm font-black transition-all '+(uniformAdminTab===s.id?'bg-blue-100 text-blue-900':'text-slate-700 hover:text-slate-900')}>{s.label}</button>
+                  ))}</div>;
+                })()}
+              </React.Fragment>
+            ))}
+          </div>
+          {/* 右側內容 */}
+          <div className="flex-1 min-w-0 space-y-4">
+
+          {/* 待簽收提醒 */}
+          {uniformTab!=='receive' && uniformApps.filter(a=>a.status==='shipped').length>0 && (
+            <div onClick={()=>setUniformTab('receive')} className="p-3 bg-amber-50 border border-amber-200 rounded-xl flex items-center justify-between cursor-pointer hover:bg-amber-100 transition-colors">
+              <div className="text-sm font-black text-amber-700">您有 {uniformApps.filter(a=>a.status==='shipped').length} 筆制服待簽收</div>
+              <span className="text-sm font-black text-amber-500">前往簽收 &rarr;</span>
+            </div>
+          )}
+
+          {/* 申請制服 - 一頁式 */}
+          {uniformTab==='apply' && (
+            <div className="space-y-4">
+              {/* 基本資料 */}
+              <div className="bg-white rounded-3xl border shadow-sm p-6 space-y-4">
+                <h3 className="font-black text-lg text-slate-700">基本資料 Basic Info</h3>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-1"><label className="text-sm font-black text-slate-400">工號 Employee ID</label><div className="p-3 bg-slate-100 rounded-xl text-sm font-bold text-slate-700">{empInfo.id}</div></div>
+                  <div className="space-y-1"><label className="text-sm font-black text-slate-400">姓名 Name</label><div className="p-3 bg-slate-100 rounded-xl text-sm font-bold text-slate-700">{empInfo.name}</div></div>
+                </div>
+                <div className="space-y-1"><label className="text-sm font-black text-slate-700">據點 Location<span className="text-red-500">*</span></label>
+                  <select value={uf.location} onChange={e=>setUf('location',e.target.value)} className="w-full p-3 bg-slate-50 rounded-xl text-sm font-bold border-none outline-none">
+                    <option value="">請選擇據點</option>
+                    {locations.map(l=><option key={l} value={l}>{l}</option>)}
+                  </select>
+                </div>
+              </div>
+
+              {/* 身型資料 */}
+              <div className="bg-white rounded-3xl border shadow-sm p-6 space-y-4">
+                <h3 className="font-black text-lg text-slate-700">身型資料 Body Measurements</h3>
+                <div className="space-y-1"><label className="text-sm font-black text-slate-700">性別 Gender<span className="text-red-500">*</span></label>
+                  <div className="flex gap-2">
+                    <button onClick={()=>setUf('gender','male')} className={'flex-1 py-2.5 rounded-xl text-sm font-black transition-all '+(uf.gender==='male'?'bg-blue-600 text-white shadow':'bg-slate-100 text-slate-400')}>男 Male</button>
+                    <button onClick={()=>setUf('gender','female')} className={'flex-1 py-2.5 rounded-xl text-sm font-black transition-all '+(uf.gender==='female'?'bg-pink-500 text-white shadow':'bg-slate-100 text-slate-400')}>女 Female</button>
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-1"><label className="text-sm font-black text-slate-700">身高 Height (cm)<span className="text-red-500">*</span></label><input type="number" value={uf.height} onChange={e=>{const v=e.target.value;if(v&&uf.weight){const rec=getRecommendedSize(uf.gender,parseFloat(v),parseFloat(uf.weight));setUniformForm(p=>({...p,height:v,recommendedSize:rec.code+'('+rec.label+')',selectedSize:rec.code,outerwearSize:rec.label}));}else setUf('height',v);}} className="w-full p-3 bg-slate-50 rounded-xl text-sm font-bold outline-none" min="140" max="220"/></div>
+                  <div className="space-y-1"><label className="text-sm font-black text-slate-700">體重 Weight (kg)<span className="text-red-500">*</span></label><input type="number" value={uf.weight} onChange={e=>{const v=e.target.value;if(uf.height&&v){const rec=getRecommendedSize(uf.gender,parseFloat(uf.height),parseFloat(v));setUniformForm(p=>({...p,weight:v,recommendedSize:rec.code+'('+rec.label+')',selectedSize:rec.code,outerwearSize:rec.label}));}else setUf('weight',v);}} className="w-full p-3 bg-slate-50 rounded-xl text-sm font-bold outline-none" min="30" max="150"/></div>
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-1"><label className="text-sm font-black text-slate-400">胸圍 Chest (cm)</label><input type="number" value={uf.chest} onChange={e=>setUf('chest',e.target.value)} className="w-full p-3 bg-slate-50 rounded-xl text-sm font-bold outline-none"/></div>
+                  <div className="space-y-1"><label className="text-sm font-black text-slate-400">肩寬 Shoulder (cm)</label><input type="number" value={uf.shoulder} onChange={e=>setUf('shoulder',e.target.value)} className="w-full p-3 bg-slate-50 rounded-xl text-sm font-bold outline-none"/></div>
+                </div>
+              </div>
+
+              {/* 選擇套裝 */}
+              <div className="bg-white rounded-3xl border shadow-sm p-6 space-y-4">
+                <h3 className="font-black text-lg text-slate-700">選擇套裝 Choose Uniform Set<span className="text-red-500">*</span></h3>
+                <div className="grid grid-cols-2 gap-3">
+                  <button onClick={()=>setUf('uniformType','A_shirt')} className={'p-5 rounded-2xl border-2 text-left transition-all '+(uf.uniformType==='A_shirt'?'border-blue-600 bg-blue-50':'border-slate-200 hover:border-slate-300')}>
+                    <div className="font-black text-slate-700">A 一般職員</div>
+                    <div className="font-black text-slate-700 text-xs">General Staff</div>
+                    <div className="text-sm text-slate-500 mt-2">襯衫 Shirt × 12</div>
+                    <div className="text-sm text-slate-500">西裝外套 Blazer × 1</div>
+                  </button>
+                  <button onClick={()=>setUf('uniformType','B_polo')} className={'p-5 rounded-2xl border-2 text-left transition-all '+(uf.uniformType==='B_polo'?'border-blue-600 bg-blue-50':'border-slate-200 hover:border-slate-300')}>
+                    <div className="font-black text-slate-700">B 司機/工務/廚師</div>
+                    <div className="font-black text-slate-700 text-xs">Driver/Maintenance/Chef</div>
+                    <div className="text-sm text-slate-500 mt-2">POLO衫 × 12</div>
+                    <div className="text-sm text-slate-500">夾克 Jacket × 2</div>
+                  </button>
+                </div>
+              </div>
+
+              {/* 尺寸、數量與外套 — 選套裝後才顯示 */}
+              {uf.uniformType && <>
+              <div className="bg-white rounded-3xl border shadow-sm p-6 space-y-4">
+                <div className="flex items-center gap-2">
+                  <span className={'px-3 py-1 rounded-lg text-xs font-black '+(uf.uniformType==='A_shirt'?'bg-blue-100 text-blue-700':'bg-purple-100 text-purple-700')}>{uf.uniformType==='A_shirt'?'方案 A':'方案 B'}</span>
+                  <span className="text-sm font-black text-slate-700">{uf.uniformType==='A_shirt'?'一般職員 — 襯衫 + 西裝外套':'司機/工務/廚師 — POLO衫 + 夾克'}</span>
+                </div>
+                {uf.recommendedSize && <div className="p-3 bg-blue-50 rounded-xl flex items-center justify-between"><span className="text-sm text-slate-500">系統推薦尺寸</span><span className="text-2xl font-black text-blue-600">{uf.recommendedSize}</span></div>}
+                <div className="space-y-1"><label className="text-sm font-black text-slate-700">{uf.uniformType==='A_shirt'?'襯衫尺寸 Shirt Size':'POLO衫尺寸 POLO Shirt Size'}<span className="text-red-500">*</span></label>
+                  <div className="flex gap-1 flex-wrap">
+                    {genderSizes.map(s=>(
+                      <button key={s.size_code} onClick={()=>setUf('selectedSize',s.size_code)} className={'w-16 h-16 rounded-xl font-black transition-all flex flex-col items-center justify-center '+(uf.selectedSize===s.size_code?'bg-blue-600 text-white shadow':'bg-slate-100 text-slate-400 hover:text-slate-600')}>
+                        <div className="text-lg">{s.size_code}</div>
+                        <div className="text-xs opacity-70">{s.size_label}</div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                {uf.selectedSize && uf.recommendedSize && !uf.recommendedSize.startsWith(uf.selectedSize+'(') && <p className="text-amber-600 text-sm font-bold">您選擇的尺寸與系統推薦不同 Your selection differs from the recommendation</p>}
+                <details className="text-sm">
+                  <summary className="font-black text-slate-700 cursor-pointer">尺寸對照表 Size Chart（成衣尺寸，公分）({uf.gender==='male'?'男 Male':'女 Female'})</summary>
+                  <div className="overflow-x-auto mt-2">
+                    <table className="w-full text-xs border-collapse">
+                      <thead><tr className="bg-slate-100">{['尺寸','肩寬','胸寬','全長','袖長'].map(h=><th key={h} className="px-2 py-1.5 text-left font-black text-slate-500 border border-slate-200">{h}</th>)}</tr></thead>
+                      <tbody>{genderSizes.map(s=>(
+                        <tr key={s.id} className={s.size_code===uf.selectedSize?'bg-blue-50 font-black':''}>
+                          <td className="px-2 py-1.5 border border-slate-200 font-bold text-slate-700">{(uf.gender==='male'?'男':'女')} {s.size_code}({s.size_label})</td>
+                          <td className="px-2 py-1.5 border border-slate-200 text-slate-600">{s.shoulder_width}</td>
+                          <td className="px-2 py-1.5 border border-slate-200 text-slate-600">{s.chest_width}</td>
+                          <td className="px-2 py-1.5 border border-slate-200 text-slate-600">{s.full_length}</td>
+                          <td className="px-2 py-1.5 border border-slate-200 text-slate-600">{s.sleeve_length}</td>
+                        </tr>
+                      ))}</tbody>
+                    </table>
+                  </div>
+                </details>
+                <hr className="border-slate-200"/>
+                {uf.selectedSize && <div className="p-4 bg-slate-50 rounded-xl space-y-3">
+                  <p className="text-sm font-black text-slate-700">已選 {uf.selectedSize}({genderSizes.find(s=>s.size_code===uf.selectedSize)?.size_label})</p>
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm text-slate-600">長袖 Long Sleeve</span>
+                    <div className="flex items-center gap-3">
+                      <button onClick={()=>{if(uf.longSleeveQty>0)setUf('longSleeveQty',uf.longSleeveQty-1);}} className="w-8 h-8 rounded-lg bg-slate-200 text-slate-500 font-black flex items-center justify-center text-lg">−</button>
+                      <span className="w-8 text-center text-lg font-black">{uf.longSleeveQty}</span>
+                      <button onClick={()=>{if(uf.longSleeveQty+uf.shortSleeveQty<12)setUf('longSleeveQty',uf.longSleeveQty+1);}} className="w-8 h-8 rounded-lg bg-blue-600 text-white font-black flex items-center justify-center text-lg">＋</button>
+                      <span className="text-sm text-slate-400">件</span>
+                    </div>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm text-slate-600">短袖 Short Sleeve</span>
+                    <div className="flex items-center gap-3">
+                      <button onClick={()=>{if(uf.shortSleeveQty>0)setUf('shortSleeveQty',uf.shortSleeveQty-1);}} className="w-8 h-8 rounded-lg bg-slate-200 text-slate-500 font-black flex items-center justify-center text-lg">−</button>
+                      <span className="w-8 text-center text-lg font-black">{uf.shortSleeveQty}</span>
+                      <button onClick={()=>{if(uf.longSleeveQty+uf.shortSleeveQty<12)setUf('shortSleeveQty',uf.shortSleeveQty+1);}} className="w-8 h-8 rounded-lg bg-blue-600 text-white font-black flex items-center justify-center text-lg">＋</button>
+                      <span className="text-sm text-slate-400">件</span>
+                    </div>
+                  </div>
+                  <p className={'text-sm font-bold px-3 py-2 rounded-lg '+((uf.longSleeveQty+uf.shortSleeveQty)===12?'text-green-600 bg-green-50':(uf.longSleeveQty+uf.shortSleeveQty)>12?'text-red-600 bg-red-50':'text-amber-600 bg-amber-50')}>共 {uf.longSleeveQty+uf.shortSleeveQty} 件{(uf.longSleeveQty+uf.shortSleeveQty)===12?'，已領滿額度':(uf.longSleeveQty+uf.shortSleeveQty)>12?'，超過 12 件額度':'（額度 12 件）'}</p>
+                </div>}
+                <hr className="border-slate-200"/>
+                <div>
+                  <span className="text-sm font-black text-slate-700">{uf.uniformType==='A_shirt'?'另配西裝外套 Blazer':'另配夾克 Jacket'}</span>
+                  <span className="text-sm font-black text-slate-700 ml-2">{uf.uniformType==='A_shirt'?'1 件':'2 件'}</span>
+                  <p className="text-xs text-slate-400 mt-1">不計入 12 件額度</p>
+                  <div className="flex gap-1 flex-wrap mt-2">
+                    {outerwearSizeLabels.map(s=><button key={s} onClick={()=>setUf('outerwearSize',s)} className={'px-5 py-2.5 rounded-xl text-sm font-black transition-all '+(uf.outerwearSize===s?'bg-blue-600 text-white shadow':'bg-slate-100 text-slate-400')}>{s}</button>)}
+                  </div>
+                </div>
+              </div>
+
+              </>}
+
+              {/* 送出 */}
+              <button onClick={()=>{if(!uf.location)return alert('請選擇據點');if(!uf.height||!uf.weight)return alert('請輸入身高和體重');if(!uf.selectedSize)return alert('請選擇尺寸');if(!uf.uniformType)return alert('請選擇套裝類型');if(!uf.outerwearSize)return alert('請選擇外套尺寸');const total=uf.longSleeveQty+uf.shortSleeveQty;if(total===0)return alert('請至少選擇 1 件');if(total>12)return alert('總數不可超過 12 件');handleUniformSubmit();}} disabled={uniformSubmitting} className="w-full py-4 bg-blue-900 text-white rounded-xl font-black text-sm disabled:opacity-50">{uniformSubmitting?'送出中...':'送出申領 Submit Application'}</button>
+            </div>
+          )}
+
+          {/* 簽收 */}
+          {uniformTab==='receive' && (
+            <div className="bg-white rounded-3xl border shadow-sm overflow-hidden">
+              <div className="px-6 py-3 bg-slate-50 border-b font-black text-sm text-slate-700">待簽收制服 Pending Receipt</div>
+              <div className="divide-y">
+                {uniformApps.filter(a=>a.status==='shipped').map(a=>(
+                  <div key={a.id} className="p-4 flex items-center justify-between">
+                    <div>
+                      <div className="text-sm font-black text-slate-700">{a.uniform_type==='A_shirt'?'襯衫 Shirt':'POLO衫'} × {a.long_sleeve_qty+a.short_sleeve_qty} + {a.outerwear_type==='blazer'?'西裝外套 Blazer':'夾克 Jacket'} × {a.outerwear_qty}</div>
+                      <div className="text-xs text-slate-400">尺寸 {a.selected_size} | {a.location} | {a.created_at?.slice(0,10)}</div>
+                    </div>
+                    <button onClick={async()=>{if(!confirm('確認已收到制服？Confirm receipt?'))return;await api.receiveUniform(a.id);api.getUniformApps({emp_id:empInfo.id}).then(setUniformApps).catch(()=>{});}} className="px-4 py-2 bg-green-600 text-white rounded-xl text-sm font-black">簽收 Confirm</button>
+                  </div>
+                ))}
+                {uniformApps.filter(a=>a.status==='shipped').length===0 && <div className="py-12 text-center text-slate-300 text-sm">目前沒有待簽收的制服 No items pending receipt</div>}
+              </div>
+            </div>
+          )}
+
+          {/* 歷史紀錄 */}
+          {uniformTab==='history' && (
+            <div className="bg-white rounded-3xl border shadow-sm overflow-hidden">
+              <div className="px-6 py-3 bg-slate-50 border-b font-black text-sm text-slate-700">申請紀錄 Application History</div>
+              <div className="divide-y">
+                {uniformApps.map(a=>{
+                  const st = statusMap[a.status]||{label:a.status,color:'slate'};
+                  return (
+                    <div key={a.id} className="p-4 space-y-1">
+                      <div className="flex items-center justify-between">
+                        <span className="text-sm font-black text-slate-700">{a.created_at?.slice(0,10)}</span>
+                        <span className={'px-2.5 py-1 rounded-full text-xs font-black bg-'+st.color+'-50 text-'+st.color+'-700'}>{st.label}</span>
+                      </div>
+                      <div className="text-sm text-slate-600">{a.uniform_type==='A_shirt'?'A 襯衫 Shirt':'B POLO衫'} | 尺寸 {a.selected_size} | 長袖 {a.long_sleeve_qty} + 短袖 {a.short_sleeve_qty}</div>
+                      <div className="text-xs text-slate-400">{a.location} | {a.outerwear_type==='blazer'?'西裝外套 Blazer × 1':'夾克 Jacket × 2'}</div>
+                    </div>
+                  );
+                })}
+                {uniformApps.length===0 && <div className="py-12 text-center text-slate-300 text-sm">尚無申請紀錄 No application history</div>}
+              </div>
+            </div>
+          )}
+
+          {/* 管理後台 */}
+          {uniformTab==='admin' && uniformRole!=='employee' && (()=>{
+            const ur = uniformRole;
+            const adminTabs = [
+              ...(['hr','super_admin'].includes(ur)?[{id:'applications',label:'申請清單'},{id:'history_all',label:'歷史紀錄查詢'}]:[]),
+              ...(['local_admin','super_admin'].includes(ur)?[{id:'shipping',label:'待發貨'}]:[]),
+              ...(['warehouse','super_admin'].includes(ur)?[{id:'inventory',label:'庫存管理'},{id:'shortage',label:'缺貨調撥'}]:[]),
+              ...(['procurement','super_admin'].includes(ur)?[{id:'alerts',label:'採購預警'}]:[]),
+              ...(['general_affairs','super_admin'].includes(ur)?[{id:'overview',label:'據點總覽'}]:[]),
+              ...(ur==='super_admin'?[{id:'permissions',label:'權限管理'}]:[]),
+            ];
+            if (adminTabs.length && !adminTabs.find(t=>t.id===uniformAdminTab)) setUniformAdminTab(adminTabs[0].id);
+            return <>
+
+            {/* 申請清單 */}
+            {uniformAdminTab==='applications' && (
+              <div className="bg-white rounded-3xl border shadow-sm overflow-hidden">
+                <div className="px-6 py-3 bg-slate-50 border-b font-black text-sm text-slate-700 flex justify-between items-center">
+                  <span>所有申請 All Applications ({uniformAllApps.length})</span>
+                </div>
+                <div className="divide-y">
+                  {uniformAllApps.map(a=>{
+                    const st = statusMap[a.status]||{label:a.status,color:'slate'};
+                    return (
+                      <div key={a.id} className="p-4 space-y-2">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <span className="text-sm font-black text-slate-700">{a.emp_name}</span>
+                            <span className="text-xs text-slate-400 ml-2">{a.emp_id} | {a.location}</span>
+                          </div>
+                          <span className={'px-2.5 py-1 rounded-full text-xs font-black bg-'+st.color+'-50 text-'+st.color+'-700'}>{st.label}</span>
+                        </div>
+                        <div className="text-sm text-slate-600">
+                          {a.uniform_type==='A_shirt'?'A 襯衫':'B POLO衫'} | 尺寸 {a.selected_size} | 長袖 {a.long_sleeve_qty} + 短袖 {a.short_sleeve_qty} | {a.outerwear_type==='blazer'?'西裝外套×1':'夾克×2'}
+                        </div>
+                        <div className="text-xs text-slate-400">
+                          {a.gender==='male'?'男':'女'} | {a.height}cm / {a.weight}kg | 推薦 {a.recommended_size} | 申請 {a.created_at?.slice(0,10)}
+                          {a.remarks && <span className="text-orange-500 ml-2">備註：{a.remarks}</span>}
+                        </div>
+                        <div className="flex gap-2 pt-1">
+                          {a.status==='pending' && <>
+                            <button onClick={async()=>{if(!confirm('核准 '+a.emp_name+' 的申請？'))return;await api.updateUniformApp(a.id,{status:'approved',approved_by:empInfo.name});api.getUniformApps({}).then(setUniformAllApps);}} className="px-3 py-1.5 bg-blue-600 text-white rounded-lg text-xs font-black">核准 Approve</button>
+                            <button onClick={async()=>{const r=prompt('駁回原因 Reject reason:');if(r===null)return;await api.updateUniformApp(a.id,{status:'rejected',remarks:r});api.getUniformApps({}).then(setUniformAllApps);}} className="px-3 py-1.5 bg-red-50 text-red-500 rounded-lg text-xs font-black">駁回 Reject</button>
+                          </>}
+                          {a.status==='approved' && <button onClick={async()=>{if(!confirm('標記 '+a.emp_name+' 已出貨？'))return;await api.updateUniformApp(a.id,{status:'shipped',shipped_by:empInfo.name});api.getUniformApps({}).then(setUniformAllApps);}} className="px-3 py-1.5 bg-purple-600 text-white rounded-lg text-xs font-black">標記已出貨 Ship</button>}
+                          {a.status==='shipped' && <span className="text-xs text-purple-500 font-bold">等待簽收中</span>}
+                          {a.status==='received' && <span className="text-xs text-green-600 font-bold">已簽收 {a.received_at?.slice(0,10)}</span>}
+                        </div>
+                      </div>
+                    );
+                  })}
+                  {uniformAllApps.length===0 && <div className="py-12 text-center text-slate-300 text-sm">暫無申請</div>}
+                </div>
+              </div>
+            )}
+
+            {/* 庫存管理 */}
+            {uniformAdminTab==='inventory' && (
+              <div className="space-y-4">
+                {(()=>{
+                  const itemTypeLabels = {shirt_long:'襯衫長袖',shirt_short:'襯衫短袖',polo_long:'POLO長袖',polo_short:'POLO短袖',blazer:'西裝外套',jacket:'夾克'};
+                  const grouped = {};
+                  uniformInventory.forEach(inv=>{
+                    if(!grouped[inv.location]) grouped[inv.location]={};
+                    if(!grouped[inv.location][inv.item_type]) grouped[inv.location][inv.item_type]={};
+                    grouped[inv.location][inv.item_type][inv.size] = inv;
+                  });
+                  return Object.entries(grouped).length > 0 ? Object.entries(grouped).map(([loc, types])=>(
+                    <div key={loc} className="bg-white rounded-3xl border shadow-sm overflow-hidden">
+                      <div className="px-6 py-3 bg-slate-900 text-white font-black text-sm">{loc}</div>
+                      {Object.entries(types).map(([type, sizes])=>(
+                        <div key={type} className="border-b last:border-b-0">
+                          <div className="px-6 py-2 bg-slate-50 text-sm font-black text-slate-600">{itemTypeLabels[type]||type}</div>
+                          <div className="px-6 py-2 flex flex-wrap gap-2">
+                            {Object.entries(sizes).map(([size, inv])=>(
+                              <div key={size} className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-50 rounded-lg">
+                                <span className="text-sm font-black text-slate-700">{size}</span>
+                                <span className={'text-sm font-bold '+(inv.quantity<=0?'text-red-500':inv.quantity<=5?'text-amber-600':'text-slate-500')}>{inv.quantity}</span>
+                                <button onClick={async()=>{const q=prompt('調整數量（正=入庫 負=出庫）:');if(!q)return;const n=parseInt(q);if(isNaN(n))return;const r=prompt('原因:')||'';await api.adjustInventory(inv.id,n,r,empInfo.name);api.getUniformInventory({}).then(setUniformInventory);}} className="text-xs text-blue-500 font-bold hover:underline">調整</button>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )) : <div className="bg-white rounded-3xl border shadow-sm p-8 text-center text-slate-300 text-sm">尚未建立庫存資料</div>;
+                })()}
+              </div>
+            )}
+
+            {/* 採購預警 */}
+            {uniformAdminTab==='alerts' && (
+              <div className="bg-white rounded-3xl border shadow-sm overflow-hidden">
+                <div className="px-6 py-3 bg-slate-50 border-b font-black text-sm text-slate-700">採購預警 Purchase Alerts</div>
+                {uniformAlerts.length > 0 ? (
+                  <table className="w-full text-sm">
+                    <thead className="bg-slate-50 border-b"><tr>
+                      {['據點','品項','尺寸','庫存','月均消耗','剩餘月數','安全月數','建議採購'].map(h=><th key={h} className="px-3 py-2 text-left font-black text-slate-500 text-xs">{h}</th>)}
+                    </tr></thead>
+                    <tbody className="divide-y">
+                      {uniformAlerts.map((a,i)=>(
+                        <tr key={i} className={a.months_left<3?'bg-red-50':a.months_left<a.safety_months?'bg-amber-50':''}>
+                          <td className="px-3 py-2 font-bold text-slate-700">{a.location}</td>
+                          <td className="px-3 py-2 text-slate-600">{a.item_type}</td>
+                          <td className="px-3 py-2 font-bold">{a.size}</td>
+                          <td className="px-3 py-2">{a.quantity}</td>
+                          <td className="px-3 py-2">{a.monthly_avg}</td>
+                          <td className={'px-3 py-2 font-black '+(a.months_left<3?'text-red-600':'text-amber-600')}>{a.months_left}</td>
+                          <td className="px-3 py-2">{a.safety_months}</td>
+                          <td className="px-3 py-2 font-black text-blue-600">{a.suggested_qty}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                ) : <div className="py-12 text-center text-green-500 text-sm font-bold">所有品項庫存充足</div>}
+              </div>
+            )}
+
+            {/* 待發貨 (local_admin / super_admin) */}
+            {uniformAdminTab==='shipping' && (<div className="space-y-4">
+              {/* 待發貨 */}
+              <div className="bg-white rounded-3xl border shadow-sm overflow-hidden">
+                <div className="px-6 py-3 bg-slate-50 border-b font-black text-sm text-slate-700">待發貨 Pending Shipment ({uniformAllApps.filter(a=>a.status==='approved').length})</div>
+                <div className="divide-y">
+                  {uniformAllApps.filter(a=>a.status==='approved').map(a=>(
+                    <div key={a.id} className="p-4 space-y-2">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <span className="text-sm font-black text-slate-700">{a.emp_name}</span>
+                          <span className="text-xs text-slate-400 ml-2">{a.emp_id} | {a.location}</span>
+                        </div>
+                        <span className="px-2.5 py-1 rounded-full text-xs font-black bg-blue-50 text-blue-700">已核准</span>
+                      </div>
+                      <div className="text-sm text-slate-600">
+                        {a.uniform_type==='A_shirt'?'襯衫':'POLO衫'} {a.selected_size} | 長袖 {a.long_sleeve_qty} + 短袖 {a.short_sleeve_qty} | {a.outerwear_type==='blazer'?'西裝外套×1':'夾克×2'}
+                      </div>
+                      <button onClick={async()=>{if(!confirm('標記 '+a.emp_name+' 已出貨？'))return;await api.updateUniformApp(a.id,{status:'shipped',shipped_by:empInfo.name});api.getUniformApps({}).then(setUniformAllApps);}} className="px-3 py-1.5 bg-purple-600 text-white rounded-lg text-xs font-black">標記已出貨 Ship</button>
+                    </div>
+                  ))}
+                  {uniformAllApps.filter(a=>a.status==='approved').length===0 && <div className="py-8 text-center text-slate-300 text-sm">目前沒有待發貨的申請</div>}
+                </div>
+              </div>
+              {/* 已出貨（等待簽收） */}
+              <div className="bg-white rounded-3xl border shadow-sm overflow-hidden">
+                <div className="px-6 py-3 bg-purple-50 border-b font-black text-sm text-purple-700">已出貨（等待簽收）Shipped ({uniformAllApps.filter(a=>a.status==='shipped').length})</div>
+                <div className="divide-y">
+                  {uniformAllApps.filter(a=>a.status==='shipped').map(a=>(
+                    <div key={a.id} className="p-4 flex items-center justify-between">
+                      <div>
+                        <div className="text-sm font-black text-slate-700">{a.emp_name} <span className="text-xs text-slate-400">{a.emp_id} | {a.location}</span></div>
+                        <div className="text-xs text-slate-500">{a.uniform_type==='A_shirt'?'襯衫':'POLO衫'} {a.selected_size} | 長袖 {a.long_sleeve_qty} + 短袖 {a.short_sleeve_qty}</div>
+                        {a.shipped_by && <div className="text-xs text-purple-500">出貨人：{a.shipped_by}</div>}
+                      </div>
+                      <span className="px-2.5 py-1 rounded-full text-xs font-black bg-purple-50 text-purple-700">等待簽收</span>
+                    </div>
+                  ))}
+                  {uniformAllApps.filter(a=>a.status==='shipped').length===0 && <div className="py-8 text-center text-slate-300 text-sm">目前沒有已出貨的紀錄</div>}
+                </div>
+              </div>
+              {/* 已簽收 */}
+              <div className="bg-white rounded-3xl border shadow-sm overflow-hidden">
+                <div className="px-6 py-3 bg-green-50 border-b font-black text-sm text-green-700">已簽收 Received ({uniformAllApps.filter(a=>a.status==='received').length})</div>
+                <div className="divide-y">
+                  {uniformAllApps.filter(a=>a.status==='received').map(a=>(
+                    <div key={a.id} className="p-4 flex items-center justify-between">
+                      <div>
+                        <div className="text-sm font-black text-slate-700">{a.emp_name} <span className="text-xs text-slate-400">{a.emp_id} | {a.location}</span></div>
+                        <div className="text-xs text-slate-500">{a.uniform_type==='A_shirt'?'襯衫':'POLO衫'} {a.selected_size} | 長袖 {a.long_sleeve_qty} + 短袖 {a.short_sleeve_qty}</div>
+                        <div className="text-xs text-green-600">簽收時間：{a.received_at?.slice(0,10)}</div>
+                      </div>
+                      <span className="px-2.5 py-1 rounded-full text-xs font-black bg-green-50 text-green-700">已簽收</span>
+                    </div>
+                  ))}
+                  {uniformAllApps.filter(a=>a.status==='received').length===0 && <div className="py-8 text-center text-slate-300 text-sm">目前沒有已簽收的紀錄</div>}
+                </div>
+              </div>
+            </div>)}
+
+            {/* 權限管理 (super_admin) */}
+            {/* 歷史紀錄查詢 (HR) — 查所有員工領用明細 */}
+            {uniformAdminTab==='history_all' && (
+              <div className="bg-white rounded-3xl border shadow-sm overflow-hidden">
+                <div className="px-6 py-3 bg-slate-50 border-b font-black text-sm text-slate-700 flex items-center gap-3">
+                  <span>歷史紀錄查詢</span>
+                  <input value={uniformAdminSearch||''} onChange={e=>setUniformAdminSearch(e.target.value)} className="p-2 bg-white rounded-xl text-sm font-bold outline-none border border-slate-200 w-48" placeholder="搜尋工號或姓名"/>
+                </div>
+                <div className="divide-y">
+                  {(()=>{
+                    const kw = (uniformAdminSearch||'').trim();
+                    const filtered = kw ? uniformAllApps.filter(a=>a.emp_name.includes(kw)||a.emp_id.includes(kw)) : uniformAllApps;
+                    return filtered.length > 0 ? filtered.map(a=>{
+                      const st = statusMap[a.status]||{label:a.status,color:'slate'};
+                      return (
+                        <div key={a.id} className="p-4 space-y-1">
+                          <div className="flex items-center justify-between">
+                            <div>
+                              <span className="text-sm font-black text-slate-700">{a.emp_name}</span>
+                              <span className="text-xs text-slate-400 ml-2">{a.emp_id} | {a.location}</span>
+                            </div>
+                            <span className={'px-2.5 py-1 rounded-full text-xs font-black bg-'+st.color+'-50 text-'+st.color+'-700'}>{st.label}</span>
+                          </div>
+                          <div className="text-sm text-slate-600">{a.uniform_type==='A_shirt'?'A 襯衫':'B POLO衫'} | 尺寸 {a.selected_size} | 長袖 {a.long_sleeve_qty} + 短袖 {a.short_sleeve_qty} | {a.outerwear_type==='blazer'?'西裝外套×1':'夾克×2'}</div>
+                          <div className="text-xs text-slate-400">申請 {a.created_at?.slice(0,10)}{a.received_at ? ' | 簽收 '+a.received_at.slice(0,10) : ''}</div>
+                        </div>
+                      );
+                    }) : <div className="py-12 text-center text-slate-300 text-sm">{kw?'查無符合的紀錄':'尚無申請紀錄'}</div>;
+                  })()}
+                </div>
+              </div>
+            )}
+
+            {/* 缺貨調撥 (Warehouse) — 庫存不足需要從嘉義總庫調撥的項目 */}
+            {uniformAdminTab==='shortage' && (
+              <div className="bg-white rounded-3xl border shadow-sm overflow-hidden">
+                <div className="px-6 py-3 bg-amber-50 border-b font-black text-sm text-amber-700">缺貨調撥 Shortage & Transfer</div>
+                <div className="divide-y">
+                  {(()=>{
+                    // 找出已核准但當地庫存不足的申請
+                    const pending = uniformAllApps.filter(a=>a.status==='approved');
+                    if (!pending.length) return <div className="py-12 text-center text-slate-300 text-sm">目前沒有需要調撥的項目</div>;
+                    // 按據點分組
+                    const byLoc = {};
+                    pending.forEach(a=>{if(!byLoc[a.location])byLoc[a.location]=[];byLoc[a.location].push(a);});
+                    return Object.entries(byLoc).map(([loc, apps])=>(
+                      <div key={loc} className="p-4 space-y-2">
+                        <div className="font-black text-slate-700">{loc} <span className="text-xs text-slate-400">({apps.length} 筆待發)</span></div>
+                        {apps.map(a=>(
+                          <div key={a.id} className="ml-4 flex items-center justify-between text-sm">
+                            <div>
+                              <span className="font-bold text-slate-700">{a.emp_name}</span>
+                              <span className="text-slate-500 ml-2">{a.uniform_type==='A_shirt'?'襯衫':'POLO衫'} {a.selected_size} | 長袖{a.long_sleeve_qty} 短袖{a.short_sleeve_qty}</span>
+                            </div>
+                            <button onClick={async()=>{if(!confirm('從嘉義總庫調撥並標記 '+a.emp_name+' 已出貨？'))return;await api.updateUniformApp(a.id,{status:'shipped',shipped_by:empInfo.name+' (總庫調撥)'});api.getUniformApps({}).then(setUniformAllApps);}} className="px-3 py-1 bg-amber-500 text-white rounded-lg text-xs font-black shrink-0">調撥出貨</button>
+                          </div>
+                        ))}
+                      </div>
+                    ));
+                  })()}
+                </div>
+              </div>
+            )}
+
+            {/* 據點總覽 (General Affairs) — 各據點庫存與發放狀況 */}
+            {uniformAdminTab==='overview' && (
+              <div className="space-y-4">
+                <div className="bg-white rounded-3xl border shadow-sm overflow-hidden">
+                  <div className="px-6 py-3 bg-slate-50 border-b font-black text-sm text-slate-700">各據點發放狀況</div>
+                  <div className="divide-y">
+                    {(()=>{
+                      const locStats = {};
+                      uniformAllApps.forEach(a=>{
+                        if(!locStats[a.location]) locStats[a.location]={pending:0,approved:0,shipped:0,received:0,total:0};
+                        locStats[a.location][a.status]=(locStats[a.location][a.status]||0)+1;
+                        locStats[a.location].total++;
+                      });
+                      const entries = Object.entries(locStats);
+                      return entries.length > 0 ? entries.map(([loc, s])=>(
+                        <div key={loc} className="p-4 flex items-center justify-between">
+                          <span className="text-sm font-black text-slate-700">{loc}</span>
+                          <div className="flex gap-2">
+                            {s.pending>0 && <span className="px-2 py-0.5 rounded-full text-xs font-black bg-yellow-50 text-yellow-700">待審核 {s.pending}</span>}
+                            {s.approved>0 && <span className="px-2 py-0.5 rounded-full text-xs font-black bg-blue-50 text-blue-700">已核准 {s.approved}</span>}
+                            {s.shipped>0 && <span className="px-2 py-0.5 rounded-full text-xs font-black bg-purple-50 text-purple-700">已出貨 {s.shipped}</span>}
+                            {s.received>0 && <span className="px-2 py-0.5 rounded-full text-xs font-black bg-green-50 text-green-700">已簽收 {s.received}</span>}
+                            <span className="text-xs text-slate-400">共 {s.total} 筆</span>
+                          </div>
+                        </div>
+                      )) : <div className="py-12 text-center text-slate-300 text-sm">尚無資料</div>;
+                    })()}
+                  </div>
+                </div>
+                {/* 庫存概覽 */}
+                <div className="bg-white rounded-3xl border shadow-sm overflow-hidden">
+                  <div className="px-6 py-3 bg-slate-50 border-b font-black text-sm text-slate-700">各據點庫存概覽</div>
+                  <div className="divide-y">
+                    {(()=>{
+                      const byLoc = {};
+                      uniformInventory.forEach(inv=>{
+                        if(!byLoc[inv.location]) byLoc[inv.location]=0;
+                        byLoc[inv.location]+=inv.quantity;
+                      });
+                      const entries = Object.entries(byLoc);
+                      return entries.length > 0 ? entries.map(([loc, total])=>(
+                        <div key={loc} className="p-4 flex items-center justify-between">
+                          <span className="text-sm font-black text-slate-700">{loc}</span>
+                          <span className={'text-sm font-black '+(total<=10?'text-red-600':total<=30?'text-amber-600':'text-slate-700')}>{total} 件</span>
+                        </div>
+                      )) : <div className="py-12 text-center text-slate-300 text-sm">尚未建立庫存資料</div>;
+                    })()}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {uniformAdminTab==='permissions' && (
+              <div className="space-y-4">
+                <div className="bg-white rounded-3xl border shadow-sm">
+                  <div className="px-6 py-3 bg-slate-50 border-b rounded-t-3xl font-black text-sm text-slate-700">新增角色 Add Role</div>
+                  <div className="p-4 space-y-3">
+                    <div className="space-y-1 relative">
+                      <label className="text-sm font-black text-slate-400">搜尋同仁</label>
+                      <input value={uniformRoleSearch} onChange={e=>{
+                        const v=e.target.value;setUniformRoleSearch(v);
+                        if(v.length>=1){api.searchEmployees(v).then(r=>{setUniformRoleResults(r);setUniformRoleShowList(true);}).catch(()=>{});}
+                        else{setUniformRoleResults([]);setUniformRoleShowList(false);}
+                      }} onFocus={()=>{if(uniformRoleResults.length>0)setUniformRoleShowList(true);}} className="w-full p-3 bg-slate-50 rounded-xl font-bold outline-none text-sm"/>
+                      {uniformRoleShowList && uniformRoleResults.length>0 && (
+                        <div className="absolute z-20 top-full left-0 right-0 mt-1 bg-white border rounded-xl shadow-lg max-h-48 overflow-y-auto">
+                          {uniformRoleResults.map((emp,i)=>(
+                            <div key={i} onClick={()=>{setUniformRoleSearch(emp.name+' ('+emp.account_id+')');setUniformRoleShowList(false);setUniformRoleResults([{...emp,_selected:true}]);}} className="px-4 py-2.5 hover:bg-blue-50 cursor-pointer flex justify-between items-center border-b last:border-b-0">
+                              <span className="font-bold text-slate-700">{emp.name}</span>
+                              <span className="text-xs text-slate-400">{emp.account_id}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                    {uniformRoleResults.length===1 && uniformRoleResults[0]._selected && (()=>{
+                      const sel = uniformRoleResults[0];
+                      const roleOptions = [{id:'hr',label:'人資 HR'},{id:'local_admin',label:'當地窗口 Local Admin'},{id:'warehouse',label:'嘉義總庫/生管 Warehouse'},{id:'procurement',label:'採購 Procurement'},{id:'general_affairs',label:'總務 General Affairs'},{id:'super_admin',label:'系統管理員 Super Admin'}];
+                      return (
+                        <div className="space-y-3 p-3 bg-blue-50 rounded-xl">
+                          <div className="text-sm font-black text-slate-700">{sel.name} ({sel.account_id})</div>
+                          <div className="space-y-1">
+                            <label className="text-sm font-black text-slate-400">角色</label>
+                            <select value={uniformNewRole} onChange={e=>setUniformNewRole(e.target.value)} className="w-full p-2.5 bg-white rounded-xl text-sm font-bold border-none outline-none">
+                              {roleOptions.map(r=><option key={r.id} value={r.id}>{r.label}</option>)}
+                            </select>
+                          </div>
+                          {uniformNewRole==='local_admin' && (
+                            <div className="space-y-1">
+                              <label className="text-sm font-black text-slate-400">負責據點</label>
+                              <select value={uniformNewLoc} onChange={e=>setUniformNewLoc(e.target.value)} className="w-full p-2.5 bg-white rounded-xl text-sm font-bold border-none outline-none">
+                                <option value="">請選擇</option>
+                                {locations.map(l=><option key={l} value={l}>{l}</option>)}
+                              </select>
+                            </div>
+                          )}
+                          <button onClick={async()=>{
+                            if(uniformNewRole==='local_admin'&&!uniformNewLoc)return alert('請選擇據點');
+                            await api.createUniformRole({emp_id:sel.account_id,emp_name:sel.name,role:uniformNewRole,location:uniformNewRole==='local_admin'?uniformNewLoc:null});
+                            setUniformRoleSearch('');setUniformRoleResults([]);setUniformNewRole('hr');setUniformNewLoc('');
+                            api.getUniformRoles().then(setUniformAllRoles);
+                            alert('角色已設定');
+                          }} className="px-4 py-2 bg-blue-600 text-white rounded-xl text-sm font-black">確認設定</button>
+                        </div>
+                      );
+                    })()}
+                  </div>
+                </div>
+
+                <div className="bg-white rounded-3xl border shadow-sm overflow-hidden">
+                  <div className="px-6 py-3 bg-slate-50 border-b font-black text-sm text-slate-700">已設定角色 ({uniformAllRoles.length})</div>
+                  <div className="divide-y">
+                    {(()=>{
+                      const roleLabels = {hr:'人資 HR',local_admin:'當地窗口',warehouse:'嘉義總庫/生管',procurement:'採購',general_affairs:'總務',super_admin:'系統管理員'};
+                      const roleColors = {hr:'blue',local_admin:'purple',warehouse:'amber',procurement:'emerald',general_affairs:'slate',super_admin:'red'};
+                      return uniformAllRoles.map(r=>(
+                        <div key={r.id} className="px-4 py-3 flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <span className="text-sm font-black text-slate-700">{r.emp_name}</span>
+                            <span className="text-xs text-slate-400">{r.emp_id}</span>
+                            <span className={'px-2 py-0.5 rounded-full text-xs font-black bg-'+(roleColors[r.role]||'slate')+'-50 text-'+(roleColors[r.role]||'slate')+'-700'}>{roleLabels[r.role]||r.role}</span>
+                            {r.location && <span className="text-xs text-slate-400">{r.location}</span>}
+                          </div>
+                          <button onClick={async()=>{if(!confirm('移除 '+r.emp_name+' 的角色？'))return;await api.deleteUniformRole(r.id);api.getUniformRoles().then(setUniformAllRoles);}} className="text-red-400 hover:text-red-600 text-xs font-black">移除</button>
+                        </div>
+                      ));
+                    })()}
+                    {uniformAllRoles.length===0 && <div className="py-8 text-center text-slate-300 text-sm">尚未設定任何角色</div>}
+                  </div>
+                </div>
+              </div>
+            )}
+          </>;})()}
+        </div>
+        </div>
+        </>);
+      })()}
 
     </div>
   );

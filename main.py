@@ -51,7 +51,7 @@ import re
 import openpyxl
 
 from database import Base, engine, get_db
-from models import MenuItem, Order, Employee, Holiday, DrinkOption, ExtraFee, CoffeeItem, CoffeeOrder, DeadlineOverride, VendorNote, TreatNotification, OrderReview, MeetingEvent, MeetingAttendee
+from models import MenuItem, Order, Employee, Holiday, DrinkOption, ExtraFee, CoffeeItem, CoffeeOrder, DeadlineOverride, VendorNote, TreatNotification, OrderReview, MeetingEvent, MeetingAttendee, UniformApplication, UniformSize, UniformInventory, UniformInventoryLog, UniformRole
 from schemas import (
     MenuItemCreate, MenuItemBatchImport, MenuItemOut,
     OrderCreate, OrderOut, OrderUpdate,
@@ -59,6 +59,9 @@ from schemas import (
     LoginRequest, ChangePasswordRequest, ForgotPasswordRequest,
     CoffeeItemCreate, CoffeeItemOut, CoffeeOrderCreate, CoffeeOrderOut,
     SetAdminRequest,
+    UniformApplicationCreate, UniformApplicationOut, UniformApplicationUpdate, UniformSizeOut,
+    UniformInventoryOut, UniformInventoryUpdate, UniformInventoryLogOut,
+    UniformRoleCreate, UniformRoleOut,
 )
 import bcrypt
 
@@ -154,6 +157,59 @@ try:
             logging.info("預設咖啡品項已插入")
 except Exception as e:
     logging.warning(f"Coffee items init skipped: {e}")
+
+# Migration: uniform_sizes 加新欄位
+try:
+    with engine.connect() as conn:
+        from sqlalchemy import text, inspect
+        if 'uniform_sizes' in inspect(engine).get_table_names():
+            cols = [c["name"] for c in inspect(engine).get_columns("uniform_sizes")]
+            if "size_code" not in cols:
+                conn.execute(text("ALTER TABLE uniform_sizes ADD COLUMN size_code VARCHAR(10) NOT NULL DEFAULT ''"))
+                conn.commit()
+            for col_name in ['shoulder_width', 'chest_width', 'full_length', 'sleeve_length']:
+                if col_name not in cols:
+                    conn.execute(text(f"ALTER TABLE uniform_sizes ADD COLUMN {col_name} FLOAT"))
+                    conn.commit()
+except Exception as e:
+    logging.warning(f"Uniform sizes migration skipped: {e}")
+
+# 插入預設制服尺寸對照表
+try:
+    from sqlalchemy.orm import Session as _Sess2
+    with _Sess2(engine) as _s:
+        # 重建尺寸表（schema 有變更時）
+        _s.query(UniformSize).delete()
+        _s.commit()
+        # 女版: (size_code, size_label, min_h, max_h, min_w, max_w, shoulder, chest, full_len, sleeve)
+        female_sizes = [
+            ('7','S', 148,158, 40,50, 35,43,58,55),
+            ('9','M', 155,163, 48,58, 36,45,59,55),
+            ('11','L', 160,168, 55,65, 38,49,59,55),
+            ('13','XL', 165,173, 63,75, 41,54,60,56),
+            ('15','2L', 168,178, 72,85, 41,55,60,57),
+            ('18','3L', 175,999, 82,999, 47,58,60,60),
+        ]
+        male_sizes = [
+            ('37','S', 160,168, 50,60, 38,48,71,61.5),
+            ('38','M', 165,170, 58,65, 39,50,70,61),
+            ('39','M', 168,173, 63,72, 41,53.5,73,61),
+            ('40','L', 170,178, 68,78, 42,54,69.5,63),
+            ('41','XL', 175,183, 75,88, 45,56,79,62),
+            ('42','XL', 178,185, 85,95, 48,57.5,76.5,61.5),
+            ('43','2L', 180,188, 90,105, 48,61,76.5,63),
+            ('44','2L', 185,193, 100,115, 53,64,80,62),
+            ('45','3L', 185,195, 108,125, 53,69,78,61),
+            ('48','3L', 190,999, 120,999, 55,72,80,62),
+        ]
+        for code, label, minh, maxh, minw, maxw, sw, cw, fl, sl in female_sizes:
+            _s.add(UniformSize(gender='female', size_code=code, size_label=label, min_height=minh, max_height=maxh, min_weight=minw, max_weight=maxw, shoulder_width=sw, chest_width=cw, full_length=fl, sleeve_length=sl))
+        for code, label, minh, maxh, minw, maxw, sw, cw, fl, sl in male_sizes:
+            _s.add(UniformSize(gender='male', size_code=code, size_label=label, min_height=minh, max_height=maxh, min_weight=minw, max_weight=maxw, shoulder_width=sw, chest_width=cw, full_length=fl, sleeve_length=sl))
+        _s.commit()
+        logging.info("制服尺寸對照表已更新")
+except Exception as e:
+    logging.warning(f"Uniform sizes init skipped: {e}")
 
 # 每天自動同步員工資料
 def _employee_sync_scheduler():
@@ -3436,6 +3492,236 @@ def notify_meeting_dinner(meeting_id: int, body: dict = None, db: Session = Depe
     m.notified = 1
     db.commit()
     return {"notified": len(notified_list), "names": notified_list}
+
+
+# ==================== Uniform APIs ====================
+
+@app.post("/api/uniform/apply", response_model=UniformApplicationOut)
+def create_uniform_application(req: UniformApplicationCreate, db: Session = Depends(get_db)):
+    total = req.long_sleeve_qty + req.short_sleeve_qty
+    if total > 12:
+        raise HTTPException(status_code=400, detail="襯衫/POLO衫總數不可超過12件")
+    if req.long_sleeve_qty < 0 or req.short_sleeve_qty < 0:
+        raise HTTPException(status_code=400, detail="數量不可為負數")
+    now = datetime.now(TW_TZ)
+    obj = UniformApplication(
+        emp_id=req.emp_id.strip(), emp_name=req.emp_name.strip(),
+        dept_code=req.dept_code, location=req.location,
+        height=req.height, weight=req.weight,
+        chest=req.chest, shoulder=req.shoulder,
+        gender=req.gender,
+        recommended_size=req.recommended_size, selected_size=req.selected_size,
+        uniform_type=req.uniform_type,
+        long_sleeve_qty=req.long_sleeve_qty, short_sleeve_qty=req.short_sleeve_qty,
+        outerwear_type=req.outerwear_type, outerwear_qty=req.outerwear_qty,
+        status='pending', remarks=req.remarks,
+        created_at=now.strftime("%Y-%m-%dT%H:%M:%S+08:00"),
+    )
+    db.add(obj)
+    db.commit()
+    db.refresh(obj)
+    return obj
+
+
+@app.get("/api/uniform/applications", response_model=list[UniformApplicationOut])
+def get_uniform_applications(emp_id: str | None = None, status: str | None = None, db: Session = Depends(get_db)):
+    q = db.query(UniformApplication)
+    if emp_id:
+        q = q.filter(UniformApplication.emp_id == emp_id)
+    if status:
+        q = q.filter(UniformApplication.status == status)
+    return q.order_by(UniformApplication.id.desc()).all()
+
+
+@app.put("/api/uniform/applications/{app_id}/receive", response_model=UniformApplicationOut)
+def receive_uniform(app_id: int, db: Session = Depends(get_db)):
+    obj = db.query(UniformApplication).filter(UniformApplication.id == app_id).first()
+    if not obj:
+        raise HTTPException(status_code=404, detail="申請單不存在")
+    if obj.status != 'shipped':
+        raise HTTPException(status_code=400, detail="只有已出貨的申請單可以簽收")
+    now = datetime.now(TW_TZ)
+    obj.status = 'received'
+    obj.received_at = now.strftime("%Y-%m-%dT%H:%M:%S+08:00")
+    db.commit()
+    db.refresh(obj)
+    return obj
+
+
+# --- Roles ---
+
+@app.get("/api/uniform/roles")
+def get_uniform_roles(db: Session = Depends(get_db)):
+    return [UniformRoleOut.model_validate(r) for r in db.query(UniformRole).order_by(UniformRole.role, UniformRole.emp_name).all()]
+
+
+@app.get("/api/uniform/my-role")
+def get_my_uniform_role(emp_id: str, db: Session = Depends(get_db)):
+    r = db.query(UniformRole).filter(UniformRole.emp_id == emp_id).first()
+    if r:
+        return {"role": r.role, "location": r.location}
+    return {"role": "employee", "location": None}
+
+
+@app.post("/api/uniform/roles", response_model=UniformRoleOut)
+def create_uniform_role(req: UniformRoleCreate, db: Session = Depends(get_db)):
+    existing = db.query(UniformRole).filter(UniformRole.emp_id == req.emp_id).first()
+    now = datetime.now(TW_TZ)
+    if existing:
+        existing.role = req.role
+        existing.location = req.location
+        existing.emp_name = req.emp_name
+        db.commit()
+        db.refresh(existing)
+        return existing
+    obj = UniformRole(emp_id=req.emp_id, emp_name=req.emp_name, role=req.role, location=req.location, created_at=now.strftime("%Y-%m-%dT%H:%M:%S+08:00"))
+    db.add(obj)
+    db.commit()
+    db.refresh(obj)
+    return obj
+
+
+@app.delete("/api/uniform/roles/{role_id}")
+def delete_uniform_role(role_id: int, db: Session = Depends(get_db)):
+    obj = db.query(UniformRole).filter(UniformRole.id == role_id).first()
+    if not obj:
+        raise HTTPException(status_code=404, detail="角色不存在")
+    db.delete(obj)
+    db.commit()
+    return {"ok": True}
+
+
+@app.get("/api/uniform/sizes", response_model=list[UniformSizeOut])
+def get_uniform_sizes(db: Session = Depends(get_db)):
+    return db.query(UniformSize).order_by(UniformSize.gender, UniformSize.min_height).all()
+
+
+@app.put("/api/uniform/applications/{app_id}", response_model=UniformApplicationOut)
+def update_uniform_application(app_id: int, data: UniformApplicationUpdate, db: Session = Depends(get_db)):
+    obj = db.query(UniformApplication).filter(UniformApplication.id == app_id).first()
+    if not obj:
+        raise HTTPException(status_code=404, detail="申請單不存在")
+    if data.status is not None:
+        obj.status = data.status
+    if data.approved_by is not None:
+        obj.approved_by = data.approved_by
+    if data.shipped_by is not None:
+        obj.shipped_by = data.shipped_by
+    if data.remarks is not None:
+        obj.remarks = data.remarks
+    db.commit()
+    db.refresh(obj)
+    return obj
+
+
+# --- Inventory ---
+
+@app.get("/api/uniform/inventory", response_model=list[UniformInventoryOut])
+def get_uniform_inventory(location: str | None = None, db: Session = Depends(get_db)):
+    q = db.query(UniformInventory)
+    if location:
+        q = q.filter(UniformInventory.location == location)
+    return q.order_by(UniformInventory.location, UniformInventory.item_type, UniformInventory.size).all()
+
+
+@app.post("/api/uniform/inventory")
+def create_or_update_inventory(location: str, item_type: str, size: str, quantity: int = 0, db: Session = Depends(get_db)):
+    obj = db.query(UniformInventory).filter(
+        UniformInventory.location == location,
+        UniformInventory.item_type == item_type,
+        UniformInventory.size == size,
+    ).first()
+    if obj:
+        obj.quantity = quantity
+    else:
+        obj = UniformInventory(location=location, item_type=item_type, size=size, quantity=quantity)
+        db.add(obj)
+    db.commit()
+    db.refresh(obj)
+    return UniformInventoryOut.model_validate(obj)
+
+
+@app.put("/api/uniform/inventory/{inv_id}")
+def update_inventory(inv_id: int, data: UniformInventoryUpdate, db: Session = Depends(get_db)):
+    obj = db.query(UniformInventory).filter(UniformInventory.id == inv_id).first()
+    if not obj:
+        raise HTTPException(status_code=404, detail="庫存紀錄不存在")
+    if data.quantity is not None:
+        obj.quantity = data.quantity
+    if data.safety_months is not None:
+        obj.safety_months = data.safety_months
+    db.commit()
+    db.refresh(obj)
+    return UniformInventoryOut.model_validate(obj)
+
+
+@app.post("/api/uniform/inventory/{inv_id}/adjust")
+def adjust_inventory(inv_id: int, change_qty: int, reason: str = "", operator: str = "", db: Session = Depends(get_db)):
+    obj = db.query(UniformInventory).filter(UniformInventory.id == inv_id).first()
+    if not obj:
+        raise HTTPException(status_code=404, detail="庫存紀錄不存在")
+    obj.quantity += change_qty
+    if obj.quantity < 0:
+        obj.quantity = 0
+    now = datetime.now(TW_TZ)
+    log = UniformInventoryLog(
+        inventory_id=inv_id, change_qty=change_qty,
+        reason=reason, operator=operator,
+        created_at=now.strftime("%Y-%m-%dT%H:%M:%S+08:00"),
+    )
+    db.add(log)
+    db.commit()
+    db.refresh(obj)
+    return UniformInventoryOut.model_validate(obj)
+
+
+@app.get("/api/uniform/inventory/logs", response_model=list[UniformInventoryLogOut])
+def get_inventory_logs(inventory_id: int | None = None, db: Session = Depends(get_db)):
+    q = db.query(UniformInventoryLog)
+    if inventory_id:
+        q = q.filter(UniformInventoryLog.inventory_id == inventory_id)
+    return q.order_by(UniformInventoryLog.id.desc()).limit(200).all()
+
+
+@app.get("/api/uniform/purchase-alert")
+def get_purchase_alert(db: Session = Depends(get_db)):
+    """計算各品項月消耗量，回傳低於安全月份的品項"""
+    from collections import defaultdict
+    # 最近6個月的申請（已核准以上）
+    six_months_ago = (datetime.now(TW_TZ) - timedelta(days=180)).strftime("%Y-%m-%d")
+    apps = db.query(UniformApplication).filter(
+        UniformApplication.created_at >= six_months_ago,
+        UniformApplication.status.in_(['approved', 'shipped', 'received']),
+    ).all()
+    # 統計消耗量
+    consumption = defaultdict(int)
+    for a in apps:
+        if a.uniform_type == 'A_shirt':
+            consumption[('shirt_long', a.selected_size)] += a.long_sleeve_qty
+            consumption[('shirt_short', a.selected_size)] += a.short_sleeve_qty
+            consumption[('blazer', a.selected_size)] += a.outerwear_qty
+        else:
+            consumption[('polo_long', a.selected_size)] += a.long_sleeve_qty
+            consumption[('polo_short', a.selected_size)] += a.short_sleeve_qty
+            consumption[('jacket', a.selected_size)] += a.outerwear_qty
+    # 月平均
+    monthly = {k: round(v / 6, 1) for k, v in consumption.items()}
+    # 比對庫存
+    alerts = []
+    inventories = db.query(UniformInventory).all()
+    for inv in inventories:
+        key = (inv.item_type, inv.size)
+        avg = monthly.get(key, 0)
+        months_left = round(inv.quantity / avg, 1) if avg > 0 else 999
+        if months_left < inv.safety_months:
+            alerts.append({
+                "location": inv.location, "item_type": inv.item_type,
+                "size": inv.size, "quantity": inv.quantity,
+                "monthly_avg": avg, "months_left": months_left,
+                "safety_months": inv.safety_months,
+                "suggested_qty": max(0, round(avg * inv.safety_months - inv.quantity)),
+            })
+    return sorted(alerts, key=lambda x: x["months_left"])
 
 
 # ==================== Static Files ====================

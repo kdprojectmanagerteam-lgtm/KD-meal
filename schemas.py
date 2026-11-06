@@ -176,3 +176,121 @@ class CoffeeOrderOut(BaseModel):
 class SetAdminRequest(BaseModel):
     account_id: str
     is_admin: bool
+
+
+# --- Uniform ---
+class UniformRoleCreate(BaseModel):
+    emp_id: str
+    emp_name: str
+    role: str
+    location: str | None = None
+
+
+class UniformRoleOut(BaseModel):
+    id: int
+    emp_id: str
+    emp_name: str
+    role: str
+    location: str | None = None
+    created_at: str | None = None
+
+    model_config = {"from_attributes": True, "serialize_default": True}
+
+
+class UniformApplicationCreate(BaseModel):
+    emp_id: str
+    emp_name: str
+    dept_code: str | None = None
+    location: str
+    height: float
+    weight: float
+    chest: float | None = None
+    shoulder: float | None = None
+    gender: str
+    recommended_size: str
+    selected_size: str
+    uniform_type: str
+    long_sleeve_qty: int
+    short_sleeve_qty: int
+    outerwear_type: str
+    outerwear_qty: int
+    remarks: str | None = None
+
+
+class UniformApplicationOut(BaseModel):
+    id: int
+    emp_id: str
+    emp_name: str
+    dept_code: str | None = None
+    location: str
+    height: float
+    weight: float
+    chest: float | None = None
+    shoulder: float | None = None
+    gender: str
+    recommended_size: str
+    selected_size: str
+    uniform_type: str
+    long_sleeve_qty: int
+    short_sleeve_qty: int
+    outerwear_type: str
+    outerwear_qty: int
+    status: str
+    approved_by: str | None = None
+    shipped_by: str | None = None
+    received_at: str | None = None
+    remarks: str | None = None
+    created_at: str | None = None
+
+    model_config = {"from_attributes": True, "serialize_default": True}
+
+
+class UniformApplicationUpdate(BaseModel):
+    status: str | None = None
+    approved_by: str | None = None
+    shipped_by: str | None = None
+    remarks: str | None = None
+
+
+class UniformInventoryOut(BaseModel):
+    id: int
+    location: str
+    item_type: str
+    size: str
+    quantity: int
+    safety_months: int
+
+    model_config = {"from_attributes": True, "serialize_default": True}
+
+
+class UniformInventoryUpdate(BaseModel):
+    quantity: int | None = None
+    safety_months: int | None = None
+
+
+class UniformInventoryLogOut(BaseModel):
+    id: int
+    inventory_id: int
+    change_qty: int
+    reason: str | None = None
+    operator: str | None = None
+    created_at: str | None = None
+
+    model_config = {"from_attributes": True, "serialize_default": True}
+
+
+class UniformSizeOut(BaseModel):
+    id: int
+    gender: str
+    size_code: str
+    size_label: str
+    min_height: float
+    max_height: float
+    min_weight: float
+    max_weight: float
+    shoulder_width: float | None = None
+    chest_width: float | None = None
+    full_length: float | None = None
+    sleeve_length: float | None = None
+
+    model_config = {"from_attributes": True, "serialize_default": True}

@@ -192,3 +192,83 @@ class OrderReview(Base):
     rating = Column(Integer, nullable=False)                              # 1-5 星
     comment = Column(Text, nullable=True)                                 # 文字評論
     created_at = Column(String(50), nullable=True)
+
+
+# ==================== Uniform ====================
+
+class UniformRole(Base):
+    __tablename__ = "uniform_roles"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    emp_id = Column(String(20), nullable=False, unique=True, index=True)
+    emp_name = Column(String(50), nullable=False)
+    role = Column(String(30), nullable=False)         # hr / local_admin / warehouse / super_admin
+    location = Column(String(50), nullable=True)       # 當地窗口的據點
+    created_at = Column(String(50), nullable=True)
+
+
+class UniformApplication(Base):
+    __tablename__ = "uniform_applications"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    emp_id = Column(String(20), nullable=False, index=True)
+    emp_name = Column(String(50), nullable=False)
+    dept_code = Column(String(20), nullable=True)
+    location = Column(String(50), nullable=False)
+    height = Column(Float, nullable=False)
+    weight = Column(Float, nullable=False)
+    chest = Column(Float, nullable=True)
+    shoulder = Column(Float, nullable=True)
+    gender = Column(String(10), nullable=False)
+    recommended_size = Column(String(10), nullable=False)
+    selected_size = Column(String(10), nullable=False)
+    uniform_type = Column(String(20), nullable=False)       # A_shirt / B_polo
+    long_sleeve_qty = Column(Integer, nullable=False, default=0)
+    short_sleeve_qty = Column(Integer, nullable=False, default=0)
+    outerwear_type = Column(String(20), nullable=False)     # blazer / jacket
+    outerwear_qty = Column(Integer, nullable=False, default=0)
+    status = Column(String(20), nullable=False, default='pending')
+    approved_by = Column(String(50), nullable=True)
+    shipped_by = Column(String(50), nullable=True)
+    received_at = Column(String(50), nullable=True)
+    remarks = Column(String(500), nullable=True)
+    created_at = Column(String(50), nullable=True)
+
+
+class UniformInventory(Base):
+    __tablename__ = "uniform_inventory"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    location = Column(String(50), nullable=False)         # 據點
+    item_type = Column(String(30), nullable=False)        # shirt_long/shirt_short/polo_long/polo_short/blazer/jacket
+    size = Column(String(10), nullable=False)              # XS/S/M/L/XL/2XL/3XL
+    quantity = Column(Integer, nullable=False, default=0)
+    safety_months = Column(Integer, nullable=False, default=6)  # 安全月份數
+
+
+class UniformInventoryLog(Base):
+    __tablename__ = "uniform_inventory_logs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    inventory_id = Column(Integer, nullable=False)
+    change_qty = Column(Integer, nullable=False)           # 正=入庫 負=出庫
+    reason = Column(String(200), nullable=True)
+    operator = Column(String(50), nullable=True)
+    created_at = Column(String(50), nullable=True)
+
+
+class UniformSize(Base):
+    __tablename__ = "uniform_sizes"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    gender = Column(String(10), nullable=False)
+    size_code = Column(String(10), nullable=False)        # 7/9/11/13/15/18 or 37/38/39...
+    size_label = Column(String(10), nullable=False)        # S/M/L/XL/2L/3L
+    min_height = Column(Float, nullable=False, default=0)
+    max_height = Column(Float, nullable=False, default=999)
+    min_weight = Column(Float, nullable=False, default=0)
+    max_weight = Column(Float, nullable=False, default=999)
+    shoulder_width = Column(Float, nullable=True)          # 肩寬 cm
+    chest_width = Column(Float, nullable=True)             # 胸寬 cm
+    full_length = Column(Float, nullable=True)             # 全長 cm
+    sleeve_length = Column(Float, nullable=True)           # 袖長 cm
