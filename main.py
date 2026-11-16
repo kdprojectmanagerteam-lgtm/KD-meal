@@ -61,14 +61,17 @@ from schemas import (
     SetAdminRequest,
     UniformApplicationCreate, UniformApplicationOut, UniformApplicationUpdate, UniformSizeOut,
     UniformInventoryOut, UniformInventoryUpdate, UniformInventoryLogOut,
-    UniformRoleCreate, UniformRoleOut,
+    UniformRoleCreate, UniformRoleOut, ShipRequest,
 )
 import bcrypt
 
+logging.info("[STARTUP] create_all start")
 Base.metadata.create_all(bind=engine)
+logging.info("[STARTUP] create_all done")
 
 # Migration: 為既有 orders 表加上欄位（Cloud SQL 新建時表已包含所有欄位，此段僅供舊資料庫升級）
 try:
+    logging.info("[STARTUP] migration start")
     with engine.connect() as conn:
         from sqlalchemy import text, inspect
         columns = [c["name"] for c in inspect(engine).get_columns("orders")]
@@ -108,15 +111,17 @@ try:
         if "sold_out" not in menu_columns:
             conn.execute(text("ALTER TABLE menu_items ADD COLUMN sold_out INTEGER NOT NULL DEFAULT 0"))
             conn.commit()
-        # 回填 vendor
-        conn.execute(text("""
-            UPDATE orders SET vendor = (
-                SELECT m.vendor FROM menu_items m
-                WHERE m.date = orders.date AND m.type = orders.type AND m.name = orders.item_name
-                LIMIT 1
-            ) WHERE vendor IS NULL OR vendor = ''
-        """))
-        conn.commit()
+        # 回填 vendor（只在還有空值時才跑，避免多 instance 啟動互相鎖表）
+        need_backfill = conn.execute(text("SELECT COUNT(*) FROM orders WHERE vendor IS NULL OR vendor = ''")).fetchone()[0]
+        if need_backfill > 0:
+            conn.execute(text("""
+                UPDATE orders SET vendor = (
+                    SELECT m.vendor FROM menu_items m
+                    WHERE m.date = orders.date AND m.type = orders.type AND m.name = orders.item_name
+                    LIMIT 1
+                ) WHERE vendor IS NULL OR vendor = ''
+            """))
+            conn.commit()
         # vendor_notes 加 date 欄位
         vn_columns = [c["name"] for c in inspect(engine).get_columns("vendor_notes")]
         if "date" not in vn_columns:
@@ -143,6 +148,7 @@ try:
             conn.commit()
 except Exception as e:
     logging.warning(f"Migration skipped or failed: {e}")
+logging.info("[STARTUP] migration done")
 
 # 插入預設咖啡品項
 try:
@@ -174,40 +180,38 @@ try:
 except Exception as e:
     logging.warning(f"Uniform sizes migration skipped: {e}")
 
-# 插入預設制服尺寸對照表
+# 插入預設制服尺寸對照表（只在空的時候才插入，避免多 instance 啟動互相鎖表）
 try:
     from sqlalchemy.orm import Session as _Sess2
     with _Sess2(engine) as _s:
-        # 重建尺寸表（schema 有變更時）
-        _s.query(UniformSize).delete()
-        _s.commit()
-        # 女版: (size_code, size_label, min_h, max_h, min_w, max_w, shoulder, chest, full_len, sleeve)
-        female_sizes = [
-            ('7','S', 148,158, 40,50, 35,43,58,55),
-            ('9','M', 155,163, 48,58, 36,45,59,55),
-            ('11','L', 160,168, 55,65, 38,49,59,55),
-            ('13','XL', 165,173, 63,75, 41,54,60,56),
-            ('15','2L', 168,178, 72,85, 41,55,60,57),
-            ('18','3L', 175,999, 82,999, 47,58,60,60),
-        ]
-        male_sizes = [
-            ('37','S', 160,168, 50,60, 38,48,71,61.5),
-            ('38','M', 165,170, 58,65, 39,50,70,61),
-            ('39','M', 168,173, 63,72, 41,53.5,73,61),
-            ('40','L', 170,178, 68,78, 42,54,69.5,63),
-            ('41','XL', 175,183, 75,88, 45,56,79,62),
-            ('42','XL', 178,185, 85,95, 48,57.5,76.5,61.5),
-            ('43','2L', 180,188, 90,105, 48,61,76.5,63),
-            ('44','2L', 185,193, 100,115, 53,64,80,62),
-            ('45','3L', 185,195, 108,125, 53,69,78,61),
-            ('48','3L', 190,999, 120,999, 55,72,80,62),
-        ]
-        for code, label, minh, maxh, minw, maxw, sw, cw, fl, sl in female_sizes:
-            _s.add(UniformSize(gender='female', size_code=code, size_label=label, min_height=minh, max_height=maxh, min_weight=minw, max_weight=maxw, shoulder_width=sw, chest_width=cw, full_length=fl, sleeve_length=sl))
-        for code, label, minh, maxh, minw, maxw, sw, cw, fl, sl in male_sizes:
-            _s.add(UniformSize(gender='male', size_code=code, size_label=label, min_height=minh, max_height=maxh, min_weight=minw, max_weight=maxw, shoulder_width=sw, chest_width=cw, full_length=fl, sleeve_length=sl))
-        _s.commit()
-        logging.info("制服尺寸對照表已更新")
+        if _s.query(UniformSize).count() == 0:
+            # 女版: (size_code, size_label, min_h, max_h, min_w, max_w, shoulder, chest, full_len, sleeve)
+            female_sizes = [
+                ('7','S', 148,158, 40,50, 35,43,58,55),
+                ('9','M', 155,163, 48,58, 36,45,59,55),
+                ('11','L', 160,168, 55,65, 38,49,59,55),
+                ('13','XL', 165,173, 63,75, 41,54,60,56),
+                ('15','2L', 168,178, 72,85, 41,55,60,57),
+                ('18','3L', 175,999, 82,999, 47,58,60,60),
+            ]
+            male_sizes = [
+                ('37','S', 160,168, 50,60, 38,48,71,61.5),
+                ('38','M', 165,170, 58,65, 39,50,70,61),
+                ('39','M', 168,173, 63,72, 41,53.5,73,61),
+                ('40','L', 170,178, 68,78, 42,54,69.5,63),
+                ('41','XL', 175,183, 75,88, 45,56,79,62),
+                ('42','XL', 178,185, 85,95, 48,57.5,76.5,61.5),
+                ('43','2L', 180,188, 90,105, 48,61,76.5,63),
+                ('44','2L', 185,193, 100,115, 53,64,80,62),
+                ('45','3L', 185,195, 108,125, 53,69,78,61),
+                ('48','3L', 190,999, 120,999, 55,72,80,62),
+            ]
+            for code, label, minh, maxh, minw, maxw, sw, cw, fl, sl in female_sizes:
+                _s.add(UniformSize(gender='female', size_code=code, size_label=label, min_height=minh, max_height=maxh, min_weight=minw, max_weight=maxw, shoulder_width=sw, chest_width=cw, full_length=fl, sleeve_length=sl))
+            for code, label, minh, maxh, minw, maxw, sw, cw, fl, sl in male_sizes:
+                _s.add(UniformSize(gender='male', size_code=code, size_label=label, min_height=minh, max_height=maxh, min_weight=minw, max_weight=maxw, shoulder_width=sw, chest_width=cw, full_length=fl, sleeve_length=sl))
+            _s.commit()
+            logging.info("制服尺寸對照表已更新")
 except Exception as e:
     logging.warning(f"Uniform sizes init skipped: {e}")
 
@@ -3524,12 +3528,14 @@ def create_uniform_application(req: UniformApplicationCreate, db: Session = Depe
 
 
 @app.get("/api/uniform/applications", response_model=list[UniformApplicationOut])
-def get_uniform_applications(emp_id: str | None = None, status: str | None = None, db: Session = Depends(get_db)):
+def get_uniform_applications(emp_id: str | None = None, status: str | None = None, location: str | None = None, db: Session = Depends(get_db)):
     q = db.query(UniformApplication)
     if emp_id:
         q = q.filter(UniformApplication.emp_id == emp_id)
     if status:
         q = q.filter(UniformApplication.status == status)
+    if location:
+        q = q.filter(UniformApplication.location == location)
     return q.order_by(UniformApplication.id.desc()).all()
 
 
@@ -3596,6 +3602,49 @@ def get_uniform_sizes(db: Session = Depends(get_db)):
     return db.query(UniformSize).order_by(UniformSize.gender, UniformSize.min_height).all()
 
 
+@app.put("/api/uniform/applications/{app_id}/ship", response_model=UniformApplicationOut)
+def ship_and_deduct_inventory(app_id: int, req: ShipRequest, db: Session = Depends(get_db)):
+    """標記出貨並自動扣庫存"""
+    obj = db.query(UniformApplication).filter(UniformApplication.id == app_id).first()
+    if not obj:
+        raise HTTPException(status_code=404, detail="申請單不存在")
+    if obj.status != 'approved':
+        raise HTTPException(status_code=400, detail="只有已核准的申請單可以出貨")
+    now = datetime.now(TW_TZ)
+    obj.status = 'shipped'
+    obj.shipped_by = req.shipped_by
+
+    # 自動扣庫存
+    type_prefix = 'shirt' if obj.uniform_type == 'A_shirt' else 'polo'
+    deductions = []
+    if obj.long_sleeve_qty > 0:
+        deductions.append((f"{type_prefix}_long", obj.long_sleeve_qty))
+    if obj.short_sleeve_qty > 0:
+        deductions.append((f"{type_prefix}_short", obj.short_sleeve_qty))
+    if obj.outerwear_qty > 0:
+        deductions.append((obj.outerwear_type, obj.outerwear_qty))
+
+    for item_type, qty in deductions:
+        inv = db.query(UniformInventory).filter(
+            UniformInventory.location == obj.location,
+            UniformInventory.item_type == item_type,
+            UniformInventory.size == obj.selected_size,
+        ).first()
+        if inv:
+            inv.quantity = max(0, inv.quantity - qty)
+            log = UniformInventoryLog(
+                inventory_id=inv.id, change_qty=-qty,
+                reason=f"出貨扣庫 - {obj.emp_name}({obj.emp_id})",
+                operator=req.shipped_by,
+                created_at=now.strftime("%Y-%m-%dT%H:%M:%S+08:00"),
+            )
+            db.add(log)
+
+    db.commit()
+    db.refresh(obj)
+    return obj
+
+
 @app.put("/api/uniform/applications/{app_id}", response_model=UniformApplicationOut)
 def update_uniform_application(app_id: int, data: UniformApplicationUpdate, db: Session = Depends(get_db)):
     obj = db.query(UniformApplication).filter(UniformApplication.id == app_id).first()
@@ -3617,10 +3666,13 @@ def update_uniform_application(app_id: int, data: UniformApplicationUpdate, db: 
 # --- Inventory ---
 
 @app.get("/api/uniform/inventory", response_model=list[UniformInventoryOut])
-def get_uniform_inventory(location: str | None = None, db: Session = Depends(get_db)):
+def get_uniform_inventory(location: str | None = None, include_hq: bool = False, db: Session = Depends(get_db)):
     q = db.query(UniformInventory)
     if location:
-        q = q.filter(UniformInventory.location == location)
+        if include_hq and location != '嘉義總部':
+            q = q.filter(UniformInventory.location.in_([location, '嘉義總部']))
+        else:
+            q = q.filter(UniformInventory.location == location)
     return q.order_by(UniformInventory.location, UniformInventory.item_type, UniformInventory.size).all()
 
 

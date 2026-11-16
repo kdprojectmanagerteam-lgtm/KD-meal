@@ -179,6 +179,10 @@ class SetAdminRequest(BaseModel):
 
 
 # --- Uniform ---
+class ShipRequest(BaseModel):
+    shipped_by: str
+
+
 class UniformRoleCreate(BaseModel):
     emp_id: str
     emp_name: str

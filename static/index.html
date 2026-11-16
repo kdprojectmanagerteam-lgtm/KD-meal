@@ -108,6 +108,9 @@ const api = {
   getUniformSizes: () => request('/uniform/sizes'),
   getUniformInventory: (p={}) => { const qs=new URLSearchParams(Object.entries(p).filter(([,v])=>v!=null&&v!=='')).toString(); return request('/uniform/inventory'+(qs?'?'+qs:'')); },
   adjustInventory: (id, qty, reason, operator) => request('/uniform/inventory/'+id+'/adjust?change_qty='+qty+'&reason='+encodeURIComponent(reason)+'&operator='+encodeURIComponent(operator), { method: 'POST' }),
+  createInventory: (loc, type, size, qty) => request('/uniform/inventory?location='+encodeURIComponent(loc)+'&item_type='+type+'&size='+size+'&quantity='+qty, { method: 'POST' }),
+  getInventoryLogs: (invId) => request('/uniform/inventory/logs'+(invId?'?inventory_id='+invId:'')),
+  shipAndDeduct: (appId, shippedBy) => request('/uniform/applications/'+appId+'/ship', { method: 'PUT', body: JSON.stringify({shipped_by:shippedBy}) }),
   getPurchaseAlert: () => request('/uniform/purchase-alert'),
   getMyUniformRole: (empId) => request('/uniform/my-role?emp_id='+encodeURIComponent(empId)),
   getUniformRoles: () => request('/uniform/roles'),
@@ -164,14 +167,20 @@ const App = () => {
   const [uniformAdminTab, setUniformAdminTab] = useState('applications');
   const [uniformAllApps, setUniformAllApps] = useState([]);
   const [uniformInventory, setUniformInventory] = useState([]);
+  const [uniformInvLogs, setUniformInvLogs] = useState([]);
+  const [uniformInvLogId, setUniformInvLogId] = useState(null);
+  const [uniformShowAddInv, setUniformShowAddInv] = useState(false);
+  const [uniformAddInv, setUniformAddInv] = useState({location:'',item_type:'shirt_long',size:'M',quantity:0});
   const [uniformAlerts, setUniformAlerts] = useState([]);
   const [uniformRole, setUniformRole] = useState('employee');  // employee/hr/local_admin/warehouse/super_admin
+  const [uniformLocation, setUniformLocation] = useState(null);
   const [uniformAllRoles, setUniformAllRoles] = useState([]);
   const [uniformRoleSearch, setUniformRoleSearch] = useState('');
   const [uniformRoleResults, setUniformRoleResults] = useState([]);
   const [uniformRoleShowList, setUniformRoleShowList] = useState(false);
   const [uniformNewRole, setUniformNewRole] = useState('hr');
   const [uniformNewLoc, setUniformNewLoc] = useState('');
+  const [uniformEditRole, setUniformEditRole] = useState(null); // {id, role, location}
   const [uniformAdminSearch, setUniformAdminSearch] = useState('');
   const [activeTab, setActiveTab] = useState(()=>sessionStorage.getItem('_tab')||'order');
   const [adminSubTab, setAdminSubTab] = useState(()=>sessionStorage.getItem('_subTab')||'batchImport');
@@ -314,6 +323,7 @@ const App = () => {
   const [coffeeGuestRoom, setCoffeeGuestRoom] = useState('');
   const [coffeeOrderSearch, setCoffeeOrderSearch] = useState('');
   const [coffeeAdminOrders, setCoffeeAdminOrders] = useState([]);
+  const [coffeeAdminLoading, setCoffeeAdminLoading] = useState(false);
   const [coffeeAdminDate, setCoffeeAdminDate] = useState(localDateStr());
   const coffeeAdminDateRef = React.useRef(localDateStr());
   useEffect(()=>{coffeeAdminDateRef.current=coffeeAdminDate;},[coffeeAdminDate]);
@@ -356,10 +366,11 @@ const App = () => {
     return { start: localDateStr(mon), end: localDateStr(fri) };
   };
   const initWeek = getWeekRange(0);
-  const [queryFilter, setQueryFilter] = useState({ empId: initId, type: '全部', startDate: initWeek.start, endDate: initWeek.end });
   const [historyWeekOffset, setHistoryWeekOffset] = useState(0);
+  const [queryFilter, setQueryFilter] = useState({ empId: initId, type: '全部', startDate: initWeek.start, endDate: initWeek.end });
   const [historySubTab, setHistorySubTab] = useState('orders');
   const [myReviews, setMyReviews] = useState([]);
+  const [myReviewsLoading, setMyReviewsLoading] = useState(false);
   const [historyOrders, setHistoryOrders] = useState([]);
   const [historyReviews, setHistoryReviews] = useState({});
   const [reviewModal, setReviewModal] = useState(null);
@@ -367,6 +378,7 @@ const App = () => {
   const [reviewFilter, setReviewFilter] = useState({dateFrom:'',dateTo:'',vendor:''});
   const [reviewPage, setReviewPage] = useState(1);
   const [meetings, setMeetings] = useState([]);
+  const [meetingsLoading, setMeetingsLoading] = useState(false);
   const [meetingMonth, setMeetingMonth] = useState(localDateStr().slice(0,7));
   const [selectedMeeting, setSelectedMeeting] = useState(null);
   const [meetingAttendees, setMeetingAttendees] = useState([]);
@@ -415,9 +427,11 @@ const App = () => {
   const [proxyTreatResults, setProxyTreatResults] = useState([]);
   const [proxyFilter, setProxyFilter] = useState({ date: localDateStr(), type: '午餐' });
   const [proxyOrders, setProxyOrders] = useState([]);
+  const [proxyLoading, setProxyLoading] = useState(false);
   const [mealStatsDate, setMealStatsDate] = useState(localDateStr());
   const [mealStatsType, setMealStatsType] = useState('午餐');
   const [weeklyOrders, setWeeklyOrders] = useState([]);
+  const [weeklyLoading, setWeeklyLoading] = useState(false);
   const [weeklyWeekOffset, setWeeklyWeekOffset] = useState(0);
   const [weeklyType, setWeeklyType] = useState('午餐');
   const [weeklyItemFilter, setWeeklyItemFilter] = useState({}); // {date: {type:'item'|'vendor', value:''} }
@@ -425,9 +439,11 @@ const App = () => {
   const [editingDrinkOrder, setEditingDrinkOrder] = useState(null);
   const [editingOrderRemarks, setEditingOrderRemarks] = useState(null);
   const [mealStatsOrders, setMealStatsOrders] = useState([]);
+  const [mealStatsLoading, setMealStatsLoading] = useState(false);
   const [proxySearch, setProxySearch] = useState('');
   const [expenseDate, setExpenseDate] = useState(()=>sessionStorage.getItem('_expenseDate')||localDateStr());
   const [expenseOrders, setExpenseOrders] = useState([]);
+  const [expenseLoading, setExpenseLoading] = useState(false);
   const [extraFees, setExtraFees] = useState([]);
   const [mealStatsExtraFees, setMealStatsExtraFees] = useState([]);
   const [newExtraFee, setNewExtraFee] = useState({description:'',amount:0});
@@ -455,9 +471,10 @@ const App = () => {
   handleLogoutRef.current = handleLogout;
   empInfoRef.current = empInfo;
   const IDLE_TIMEOUT = 10 * 60 * 1000; // 10 分鐘
+  const isSIT = /sit|localhost|127\.0\.0\.1/.test(window.location.hostname);
 
   useEffect(() => {
-    if (!loggedIn) return;
+    if (!loggedIn || isSIT) return;
     const resetTimer = () => {
       if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
       idleTimerRef.current = setTimeout(() => {
@@ -506,38 +523,48 @@ const App = () => {
     if (!loggedIn) return;
     if (activeTab !== 'order' && !(activeTab === 'admin' && adminSubTab === 'weeklySummary')) return;
     loadMenu();
-    const interval = setInterval(loadMenu, 10000);
-    return () => clearInterval(interval);
   }, [activeTab, adminSubTab, displayDays, loggedIn]);
 
   const [historyMenus, setHistoryMenus] = useState([]);
   const [historyCoffeeOrders, setHistoryCoffeeOrders] = useState([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
   useEffect(() => {
     if (activeTab !== 'history') return;
-    if (!queryFilter.empId) { setHistoryOrders([]); setHistoryCoffeeOrders([]); return; }
-    const p = { emp_id: queryFilter.empId, proxy_by: empInfo.name, start_date: queryFilter.startDate, end_date: queryFilter.endDate };
-    if (queryFilter.type !== '全部') p.type = queryFilter.type;
-    api.getOrders(p).then(orders=>{
+    const { empId, type, startDate, endDate } = queryFilter;
+    if (!empId) { setHistoryOrders([]); setHistoryCoffeeOrders([]); setHistoryReviews({}); return; }
+    let cancelled = false;
+    setHistoryLoading(true);
+    const p = { emp_id: empId, proxy_by: empInfo.name, start_date: startDate, end_date: endDate };
+    if (type !== '全部') p.type = type;
+    Promise.all([
+      api.getOrders(p).catch(()=>[]),
+      api.getReviews({ emp_id: empId, date_from: startDate, date_to: endDate }).catch(()=>[]),
+      api.getCoffeeOrders({ emp_id: empId, start_date: startDate, end_date: endDate }).catch(()=>[]),
+    ]).then(([orders, revs, coffeeOrders]) => {
+      if (cancelled) return;
       setHistoryOrders(orders);
-      const orderIds = orders.map(o=>o.id).filter(Boolean);
-      if(orderIds.length>0) api.getReviews({order_id:orderIds.join(',')}).then(revs=>{
-        const map={};revs.forEach(r=>{map[r.order_id]=r;});setHistoryReviews(map);
-      }).catch(()=>{});
-      else setHistoryReviews({});
-    }).catch(()=>{});
-    api.getCoffeeOrders({ emp_id: queryFilter.empId, start_date: queryFilter.startDate, end_date: queryFilter.endDate }).then(setHistoryCoffeeOrders).catch(()=>{});
-    api.getMenu({}).then(setHistoryMenus).catch(()=>{});
+      const map={}; revs.forEach(r=>{map[r.order_id]=r;}); setHistoryReviews(map);
+      setHistoryCoffeeOrders(coffeeOrders);
+      setHistoryLoading(false);
+    });
+    return () => { cancelled = true; };
   }, [queryFilter, activeTab]);
 
   useEffect(() => {
     if (activeTab !== 'history' || historySubTab !== 'myReviews') return;
     if (!empInfo.id) return;
-    api.getReviews({emp_id: empInfo.id}).then(setMyReviews).catch(()=>{});
+    if (myReviews.length === 0) setMyReviewsLoading(true);
+    api.getReviews({emp_id: empInfo.id}).then(data=>{ setMyReviews(data); setMyReviewsLoading(false); }).catch(()=>setMyReviewsLoading(false));
   }, [activeTab, historySubTab, empInfo.id]);
 
   useEffect(() => {
+    if (activeTab !== 'admin' || adminSubTab !== 'menuMaintenance') return;
+    const wr = getWeekRange(menuWeekOffset);
+    api.getMenu({start_date:wr.start,end_date:wr.end}).then(setMenuDB).catch(()=>{});
+  }, [activeTab, adminSubTab, menuWeekOffset]);
+
+  useEffect(() => {
     if (activeTab !== 'admin' || adminSubTab !== 'orderDetails') return;
-    setAdminOrders([]);
     let cancelled = false;
     api.getOrders({ date: detailFilter.date, type: detailFilter.type }).then(data=>{ if(!cancelled) setAdminOrders(data); }).catch(()=>{ if(!cancelled) setAdminOrders([]); });
     return () => { cancelled = true; };
@@ -556,7 +583,7 @@ const App = () => {
   // 制服申領 - 載入角色和資料
   useEffect(() => {
     if (!loggedIn || activeZone !== 'uniform' || !empInfo.id) return;
-    api.getMyUniformRole(empInfo.id).then(r=>setUniformRole(r.role||'employee')).catch(()=>{});
+    api.getMyUniformRole(empInfo.id).then(r=>{setUniformRole(r.role||'employee');setUniformLocation(r.location||null);}).catch(()=>{});
   }, [loggedIn, activeZone, empInfo.id]);
 
   useEffect(() => {
@@ -568,17 +595,18 @@ const App = () => {
   // 制服後台 - 載入資料
   useEffect(() => {
     if (!loggedIn || activeZone !== 'uniform' || uniformTab !== 'admin') return;
-    if (['applications','shipping','history_all','shortage','overview'].includes(uniformAdminTab)) api.getUniformApps({}).then(setUniformAllApps).catch(()=>{});
-    if (['inventory','overview'].includes(uniformAdminTab)) api.getUniformInventory({}).then(setUniformInventory).catch(()=>{});
+    const locFilter = uniformRole==='local_admin' && uniformLocation ? uniformLocation : null;
+    if (['applications','shipping','history_all','shortage','overview'].includes(uniformAdminTab)) api.getUniformApps({location:locFilter}).then(setUniformAllApps).catch(()=>{});
+    if (['inventory','overview','shipping','shortage'].includes(uniformAdminTab)) api.getUniformInventory({location:locFilter,include_hq:locFilter?'true':''}).then(setUniformInventory).catch(()=>{});
     if (uniformAdminTab === 'alerts') api.getPurchaseAlert().then(setUniformAlerts).catch(()=>{});
     if (uniformAdminTab === 'permissions') api.getUniformRoles().then(setUniformAllRoles).catch(()=>{});
-  }, [loggedIn, activeZone, uniformTab, uniformAdminTab]);
+  }, [loggedIn, activeZone, uniformTab, uniformAdminTab, uniformRole, uniformLocation]);
 
   // 會議訂餐檢查 - 載入會議列表
   useEffect(() => {
     if (activeTab !== 'admin' || adminSubTab !== 'eventManagement') return;
-    setMeetings([]);
-    api.getMeetings(meetingMonth).then(setMeetings).catch(()=>setMeetings([]));
+    if (meetings.length === 0) setMeetingsLoading(true);
+    api.getMeetings(meetingMonth).then(data=>{setMeetings(data);setMeetingsLoading(false);}).catch(()=>setMeetingsLoading(false));
   }, [activeTab, adminSubTab, meetingMonth]);
 
   // 會議訂餐檢查 - 載入出席人員
@@ -640,7 +668,7 @@ const App = () => {
 
   // 載入假日、截止時間管理、飲料選項
   useEffect(() => { if (!loggedIn) return; api.getHolidays().then(setHolidays).catch(()=>{}); }, [loggedIn]);
-  useEffect(() => { if (!loggedIn) return; api.getDeadlineOverrides().then(setDeadlineOverrides).catch(()=>{}); }, [loggedIn]);
+  useEffect(() => { if (!loggedIn) return; api.getDeadlineOverrides().then(setDeadlineOverrides).catch(()=>{}); const t = setInterval(()=>api.getDeadlineOverrides().then(setDeadlineOverrides).catch(()=>{}), 60000); return ()=>clearInterval(t); }, [loggedIn]);
   useEffect(() => { if(activeTab==='admin'&&adminSubTab==='systemSettings') fetch('/api/employees?is_admin=1').then(r=>r.json()).then(setAdminList).catch(()=>{}); }, [activeTab, adminSubTab, accessMsg]);
   useEffect(() => { if (!loggedIn) return; api.getDrinkOptions().then(setDrinkOptions).catch(()=>{}); }, [loggedIn]);
 
@@ -672,27 +700,36 @@ const App = () => {
   // 餐點統計 - 載入訂單與額外費用
   useEffect(() => {
     if (activeTab !== 'admin' || adminSubTab !== 'mealStats') return;
-    setMealStatsOrders([]);
-    setMealStatsExtraFees([]);
     let cancelled = false;
-    api.getOrders({ date: mealStatsDate, type: mealStatsType }).then(data=>{ if(!cancelled) setMealStatsOrders(data); }).catch(()=>{ if(!cancelled) setMealStatsOrders([]); });
-    api.getExtraFees({ date: mealStatsDate }).then(fees=>{ if(!cancelled) setMealStatsExtraFees(fees.filter(f=>f.type===mealStatsType)); }).catch(()=>{ if(!cancelled) setMealStatsExtraFees([]); });
+    if (mealStatsOrders.length === 0) setMealStatsLoading(true);
+    Promise.all([
+      api.getOrders({ date: mealStatsDate, type: mealStatsType }).catch(()=>[]),
+      api.getExtraFees({ date: mealStatsDate }).catch(()=>[]),
+    ]).then(([orders, fees]) => {
+      if (cancelled) return;
+      setMealStatsOrders(orders);
+      setMealStatsExtraFees(fees.filter(f=>f.type===mealStatsType));
+      setMealStatsLoading(false);
+    });
     return () => { cancelled = true; };
   }, [activeTab, adminSubTab, mealStatsDate, mealStatsType]);
 
   // 代訂 - 載入菜單和訂單
   useEffect(() => {
     if (activeTab !== 'admin' || adminSubTab !== 'proxyOrder') return;
-    setProxyMenu([]);
-    setProxyOrders([]);
     let cancelled = false;
-    api.getMenu({ date: proxyFilter.date, type: proxyFilter.type }).then(data=>{
+    if (proxyMenu.length === 0) setProxyLoading(true);
+    Promise.all([
+      api.getMenu({ date: proxyFilter.date, type: proxyFilter.type }).catch(()=>[]),
+      api.getOrders({ date: proxyFilter.date }).catch(()=>[]),
+    ]).then(([menu, orders]) => {
       if (cancelled) return;
-      data=data.filter(m=>!m.sold_out);
-      data.sort((a,b)=>{const ma=a.name.match(/^\(?(\d+)-(\d+)\)?/);const mb=b.name.match(/^\(?(\d+)-(\d+)\)?/);if(ma&&mb){const d=parseInt(ma[1])-parseInt(mb[1]);if(d!==0)return d;return parseInt(ma[2])-parseInt(mb[2]);}return a.name.localeCompare(b.name);});
-      setProxyMenu(data);
-    }).catch(()=>{ if(!cancelled) setProxyMenu([]); });
-    api.getOrders({ date: proxyFilter.date }).then(data=>{ if(!cancelled) setProxyOrders(data); }).catch(()=>{ if(!cancelled) setProxyOrders([]); });
+      menu=menu.filter(m=>!m.sold_out);
+      menu.sort((a,b)=>{const ma=a.name.match(/^\(?(\d+)-(\d+)\)?/);const mb=b.name.match(/^\(?(\d+)-(\d+)\)?/);if(ma&&mb){const d=parseInt(ma[1])-parseInt(mb[1]);if(d!==0)return d;return parseInt(ma[2])-parseInt(mb[2]);}return a.name.localeCompare(b.name);});
+      setProxyMenu(menu);
+      setProxyOrders(orders);
+      setProxyLoading(false);
+    });
     return () => { cancelled = true; };
   }, [activeTab, adminSubTab, proxyFilter]);
 
@@ -700,11 +737,11 @@ const App = () => {
   const weeklyRange = useMemo(() => getWeekRange(weeklyWeekOffset), [weeklyWeekOffset]);
   useEffect(() => {
     if (activeTab !== 'admin' || adminSubTab !== 'weeklySummary') return;
-    setWeeklyOrders([]);
     let cancelled = false;
+    if (weeklyOrders.length === 0) setWeeklyLoading(true);
     const params = { start_date: weeklyRange.start, end_date: weeklyRange.end };
     if (weeklyType !== '全部') params.type = weeklyType;
-    api.getOrders(params).then(data=>{ if(!cancelled) setWeeklyOrders(data); }).catch(()=>{ if(!cancelled) setWeeklyOrders([]); });
+    api.getOrders(params).then(data=>{ if(!cancelled){ setWeeklyOrders(data); setWeeklyLoading(false); } }).catch(()=>{ if(!cancelled) setWeeklyLoading(false); });
     return () => { cancelled = true; };
   }, [activeTab, adminSubTab, weeklyWeekOffset, weeklyType]);
 
@@ -718,10 +755,14 @@ const App = () => {
   };
   useEffect(() => {
     if (activeTab !== 'admin' || adminSubTab !== 'expenseStats') return;
-    setExpenseOrders([]);
-    setExtraFees([]);
-    setExpenseCoffeeOrders([]);
-    reloadExpense();
+    if (expenseOrders.length === 0) setExpenseLoading(true);
+    Promise.all([
+      api.getOrders({date:expenseDate}).catch(()=>[]),
+      api.getExtraFees({date:expenseDate}).catch(()=>[]),
+      api.getCoffeeOrders({date:expenseDate}).catch(()=>[]),
+    ]).then(([orders,fees,coffees])=>{
+      setExpenseOrders(orders); setExtraFees(fees); setExpenseCoffeeOrders(coffees); setExpenseLoading(false);
+    });
   }, [activeTab, adminSubTab, expenseDate, expenseRefresh]);
 
   // 咖啡 - 前台載入品項和今日訂單
@@ -850,7 +891,7 @@ const App = () => {
     const timer = setInterval(() => {
       loadAndCheck();
       api.getCoffeeOrders({date:coffeeAdminDateRef.current}).then(setCoffeeAdminOrders).catch(()=>{});
-    }, 5000);
+    }, 30000);
 
     // 頁面從背景切回時立即檢查
     const onVisible = () => { if (document.visibilityState === 'visible') loadAndCheck(); };
@@ -861,10 +902,11 @@ const App = () => {
   // 咖啡 - 管理後台載入
   useEffect(() => {
     if (activeTab !== 'admin' || adminSubTab !== 'coffeeAdmin') return;
-    setCoffeeAdminItems([]);
-    setCoffeeAdminOrders([]);
-    api.getCoffeeItems({all:1}).then(setCoffeeAdminItems).catch(()=>setCoffeeAdminItems([]));
-    api.getCoffeeOrders({date:coffeeAdminDate}).then(setCoffeeAdminOrders).catch(()=>setCoffeeAdminOrders([]));
+    if (coffeeAdminOrders.length === 0) setCoffeeAdminLoading(true);
+    Promise.all([
+      api.getCoffeeItems({all:1}).catch(()=>[]),
+      api.getCoffeeOrders({date:coffeeAdminDate}).catch(()=>[]),
+    ]).then(([items,orders])=>{ setCoffeeAdminItems(items); setCoffeeAdminOrders(orders); setCoffeeAdminLoading(false); });
   }, [activeTab, adminSubTab]);
 
   // 管理後台每 15 秒自動刷新
@@ -875,29 +917,60 @@ const App = () => {
         const wr = getWeekRange(menuWeekOffset);
         api.getMenu({start_date:wr.start,end_date:wr.end}).then(setMenuDB).catch(()=>{});
       } else if (adminSubTab === 'orderDetails') {
-        api.getOrders({date:detailFilter.date,type:detailFilter.type}).then(setAdminOrders).catch(()=>setAdminOrders([]));
+        api.getOrders({date:detailFilter.date,type:detailFilter.type}).then(setAdminOrders).catch(()=>{});
       } else if (adminSubTab === 'mealStats') {
-        api.getOrders({date:mealStatsDate,type:mealStatsType}).then(setMealStatsOrders).catch(()=>setMealStatsOrders([]));
-        api.getExtraFees({date:mealStatsDate}).then(fees=>setMealStatsExtraFees(fees.filter(f=>f.type===mealStatsType))).catch(()=>setMealStatsExtraFees([]));
+        api.getOrders({date:mealStatsDate,type:mealStatsType}).then(setMealStatsOrders).catch(()=>{});
+        api.getExtraFees({date:mealStatsDate}).then(fees=>setMealStatsExtraFees(fees.filter(f=>f.type===mealStatsType))).catch(()=>{});
       } else if (adminSubTab === 'proxyOrder') {
-        api.getMenu({date:proxyFilter.date,type:proxyFilter.type}).then(data=>{data=data.filter(m=>!m.sold_out);data.sort((a,b)=>{const ma=a.name.match(/^\(?(\d+)-(\d+)\)?/);const mb=b.name.match(/^\(?(\d+)-(\d+)\)?/);if(ma&&mb){const d=parseInt(ma[1])-parseInt(mb[1]);if(d!==0)return d;return parseInt(ma[2])-parseInt(mb[2]);}return a.name.localeCompare(b.name);});setProxyMenu(data);}).catch(()=>setProxyMenu([]));
-        api.getOrders({date:proxyFilter.date}).then(setProxyOrders).catch(()=>setProxyOrders([]));
+        api.getMenu({date:proxyFilter.date,type:proxyFilter.type}).then(data=>{data=data.filter(m=>!m.sold_out);data.sort((a,b)=>{const ma=a.name.match(/^\(?(\d+)-(\d+)\)?/);const mb=b.name.match(/^\(?(\d+)-(\d+)\)?/);if(ma&&mb){const d=parseInt(ma[1])-parseInt(mb[1]);if(d!==0)return d;return parseInt(ma[2])-parseInt(mb[2]);}return a.name.localeCompare(b.name);});setProxyMenu(data);}).catch(()=>{});
+        api.getOrders({date:proxyFilter.date}).then(setProxyOrders).catch(()=>{});
       } else if (adminSubTab === 'weeklySummary') {
         const wr = getWeekRange(weeklyWeekOffset);
         const params = {start_date:wr.start,end_date:wr.end};
         if (weeklyType!=='全部') params.type = weeklyType;
-        api.getOrders(params).then(setWeeklyOrders).catch(()=>setWeeklyOrders([]));
+        api.getOrders(params).then(setWeeklyOrders).catch(()=>{});
       } else if (adminSubTab === 'expenseStats') {
-        api.getOrders({date:expenseDate}).then(setExpenseOrders).catch(()=>setExpenseOrders([]));
-        api.getExtraFees({date:expenseDate}).then(setExtraFees).catch(()=>setExtraFees([]));
-        api.getCoffeeOrders({date:expenseDate}).then(setExpenseCoffeeOrders).catch(()=>setExpenseCoffeeOrders([]));
+        api.getOrders({date:expenseDate}).then(setExpenseOrders).catch(()=>{});
+        api.getExtraFees({date:expenseDate}).then(setExtraFees).catch(()=>{});
+        api.getCoffeeOrders({date:expenseDate}).then(setExpenseCoffeeOrders).catch(()=>{});
       } else if (adminSubTab === 'coffeeAdmin') {
-        api.getCoffeeItems({all:1}).then(setCoffeeAdminItems).catch(()=>setCoffeeAdminItems([]));
-        api.getCoffeeOrders({date:coffeeAdminDate}).then(setCoffeeAdminOrders).catch(()=>setCoffeeAdminOrders([]));
+        api.getCoffeeItems({all:1}).then(setCoffeeAdminItems).catch(()=>{});
+        api.getCoffeeOrders({date:coffeeAdminDate}).then(setCoffeeAdminOrders).catch(()=>{});
       }
     }, 15000);
     return () => clearInterval(timer);
   }, [activeTab, adminSubTab, menuWeekOffset, detailFilter, mealStatsDate, mealStatsType, proxyFilter, weeklyWeekOffset, weeklyType, expenseDate, coffeeAdminDate, loggedIn]);
+
+  // 登入後背景預載所有管理後台主要子頁資料，避免切換時空白
+  useEffect(() => {
+    if (!loggedIn) return;
+    const wr = getWeekRange(weeklyWeekOffset);
+    const today = localDateStr();
+    // 餐點統計
+    api.getOrders({date: mealStatsDate, type: mealStatsType}).then(setMealStatsOrders).catch(()=>{});
+    api.getExtraFees({date: mealStatsDate}).then(fees=>setMealStatsExtraFees(fees.filter(f=>f.type===mealStatsType))).catch(()=>{});
+    // 訂餐明細
+    api.getOrders({date: detailFilter.date, type: detailFilter.type}).then(setAdminOrders).catch(()=>{});
+    // 預定總表
+    const wp = {start_date:wr.start,end_date:wr.end};
+    if (weeklyType!=='全部') wp.type = weeklyType;
+    api.getOrders(wp).then(setWeeklyOrders).catch(()=>{});
+    // 代訂菜單 + 代訂訂單
+    api.getMenu({date: proxyFilter.date, type: proxyFilter.type}).then(data=>{
+      data=data.filter(m=>!m.sold_out);
+      data.sort((a,b)=>{const ma=a.name.match(/^\(?(\d+)-(\d+)\)?/);const mb=b.name.match(/^\(?(\d+)-(\d+)\)?/);if(ma&&mb){const d=parseInt(ma[1])-parseInt(mb[1]);if(d!==0)return d;return parseInt(ma[2])-parseInt(mb[2]);}return a.name.localeCompare(b.name);});
+      setProxyMenu(data);
+    }).catch(()=>{});
+    api.getOrders({date: proxyFilter.date}).then(setProxyOrders).catch(()=>{});
+    // 費用統計
+    api.getOrders({date: expenseDate}).then(setExpenseOrders).catch(()=>{});
+    api.getExtraFees({date: expenseDate}).then(setExtraFees).catch(()=>{});
+    api.getCoffeeOrders({date: expenseDate}).then(setExpenseCoffeeOrders).catch(()=>{});
+    // 我的評論
+    if (empInfo.id) api.getReviews({emp_id: empInfo.id}).then(setMyReviews).catch(()=>{});
+    // 系統設定 - 權限管理
+    fetch('/api/employees?is_admin=1').then(r=>r.json()).then(setAdminList).catch(()=>{});
+  }, [loggedIn]);
 
   const handleCoffeeAddToCart = (item, temp, timePref, customizations, qty, note) => {
     if (!item || qty < 1) return;
@@ -2290,9 +2363,9 @@ const App = () => {
                 <h2 className="text-base md:text-lg font-black text-slate-700">歷史點餐紀錄查詢 Order History</h2>
               </div>
               <div className="flex items-center justify-between gap-2">
-                <button onClick={()=>{const o=historyWeekOffset-1;setHistoryWeekOffset(o);const w=getWeekRange(o);setQueryFilter(prev=>({...prev,startDate:w.start,endDate:w.end}));}} className="px-3 md:px-5 py-2 md:py-2.5 rounded-xl text-xs md:text-sm font-black text-slate-700 bg-white border shadow-sm hover:bg-slate-50 transition-colors shrink-0">&lt; 上週</button>
+                <button onClick={()=>{const n=historyWeekOffset-1;const w=getWeekRange(n);setHistoryWeekOffset(n);setQueryFilter(prev=>({...prev,startDate:w.start,endDate:w.end}));}} className="px-3 md:px-5 py-2 md:py-2.5 rounded-xl text-xs md:text-sm font-black text-slate-700 bg-white border shadow-sm hover:bg-slate-50 transition-colors shrink-0">&lt; 上週</button>
                 <span className="font-black text-sm md:text-lg text-slate-700 text-center"><span className="md:inline block">{queryFilter.startDate}({getWeekday(queryFilter.startDate)})</span><span className="md:inline block">~</span><span className="md:inline block">{queryFilter.endDate}({getWeekday(queryFilter.endDate)})</span></span>
-                <button onClick={()=>{const o=historyWeekOffset+1;setHistoryWeekOffset(o);const w=getWeekRange(o);setQueryFilter(prev=>({...prev,startDate:w.start,endDate:w.end}));}} className="px-3 md:px-5 py-2 md:py-2.5 rounded-xl text-xs md:text-sm font-black text-slate-700 bg-white border shadow-sm hover:bg-slate-50 transition-colors shrink-0">下週 &gt;</button>
+                <button onClick={()=>{const n=historyWeekOffset+1;const w=getWeekRange(n);setHistoryWeekOffset(n);setQueryFilter(prev=>({...prev,startDate:w.start,endDate:w.end}));}} className="px-3 md:px-5 py-2 md:py-2.5 rounded-xl text-xs md:text-sm font-black text-slate-700 bg-white border shadow-sm hover:bg-slate-50 transition-colors shrink-0">下週 &gt;</button>
               </div>
             </section>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -2303,7 +2376,7 @@ const App = () => {
                     <span className="font-black text-sm md:text-base text-slate-700">{type}明細 {({午餐:'Lunch Details',飲料:'Beverages Details',晚餐:'Dinner Details',早餐:'Breakfast Details'})[type]}</span>
                   </div>
                   <div className="flex-1 p-4 md:p-6">
-                    {userHistory[type].length>0 ? (()=>{
+                    {historyLoading ? <div className="h-32 flex items-center justify-center text-slate-400 italic text-sm">載入中...</div> : userHistory[type].length>0 ? (()=>{
                       const grouped = {};
                       userHistory[type].forEach(o=>{
                         const key = o.date;
@@ -2379,7 +2452,7 @@ const App = () => {
                   <span className="font-black text-sm md:text-base text-slate-700">咖啡明細 Coffee Details</span>
                 </div>
                 <div className="flex-1 p-4 md:p-6">
-                  {historyCoffeeOrders.length>0 ? (()=>{
+                  {historyLoading ? <div className="h-32 flex items-center justify-center text-slate-400 italic text-sm">載入中...</div> : historyCoffeeOrders.length>0 ? (()=>{
                     const grouped = {};
                     [...historyCoffeeOrders].sort((a,b)=>a.date.localeCompare(b.date)||(a.created_at||'').localeCompare(b.created_at||'')).forEach(o=>{
                       if(!grouped[o.date]) grouped[o.date] = [];
@@ -2444,7 +2517,9 @@ const App = () => {
                 <div className="bg-white p-4 rounded-2xl border shadow-sm">
                   <input value={reviewFilter.vendor} onChange={e=>{setReviewFilter(p=>({...p,vendor:e.target.value}));if(empInfo.id)api.getReviews({emp_id:empInfo.id,vendor:e.target.value||undefined}).then(setMyReviews).catch(()=>{});}} className="w-full p-2.5 border rounded-xl text-sm outline-none focus:border-blue-400" placeholder="搜尋店家 Search Restaurant"/>
                 </div>
-                {myReviews.length === 0 ? (
+                {myReviewsLoading ? (
+                  <div className="bg-white rounded-2xl border shadow-sm p-12 text-center text-slate-400">載入中...</div>
+                ) : myReviews.length === 0 ? (
                   <div className="bg-white rounded-2xl border shadow-sm p-12 text-center text-slate-400">尚無評論 No comments yet</div>
                 ) : (
                   <div className="space-y-3">
@@ -3482,7 +3557,8 @@ const App = () => {
                       );
                     })}
                   </div>
-                  {proxyMenu.length===0 && <div className="py-12 text-center text-slate-300 font-bold">該日期/類型暫無菜單</div>}
+                  {proxyLoading && <div className="py-12 text-center text-slate-400 font-bold">載入中...</div>}
+                  {!proxyLoading && proxyMenu.length===0 && <div className="py-12 text-center text-slate-300 font-bold">該日期/類型暫無菜單</div>}
                 </div>);})()}
                 {proxyFilter.type==='飲料' && Object.keys(proxyCart).length>0 && (()=>{
                   const _proxyVendor = Object.values(proxyCart)[0]?.vendor||'';
@@ -3683,6 +3759,7 @@ const App = () => {
                   </div>
                 </div>
 
+                {mealStatsLoading && <div className="text-center text-slate-400 py-12">載入中...</div>}
                 {/* 餐點統計表格 */}
                 <div className="space-y-6">
                   {mealStatsType==='午餐' ? catDefs.map(({key,color})=>{
@@ -3811,7 +3888,7 @@ const App = () => {
                       );
                     });
                   })()}
-                  {mealStatsOrders.length===0 && <div className="py-12 text-center text-slate-300 font-bold italic">該日期暫無訂單</div>}
+                  {!mealStatsLoading && mealStatsOrders.length===0 && <div className="py-12 text-center text-slate-300 font-bold italic">該日期暫無訂單</div>}
                 </div>
               </div>
               );
@@ -4168,7 +4245,8 @@ const App = () => {
                           })}
                         </tr>);
                       })}
-                      {empList.length===0 && <tr><td colSpan={weekDates.length+2} className="px-6 py-12 text-center text-slate-300 italic">本週暫無訂單</td></tr>}
+                      {weeklyLoading && <tr><td colSpan={weekDates.length+2} className="px-6 py-12 text-center text-slate-400 italic">載入中...</td></tr>}
+                      {!weeklyLoading && empList.length===0 && <tr><td colSpan={weekDates.length+2} className="px-6 py-12 text-center text-slate-300 italic">本週暫無訂單</td></tr>}
                     </tbody>
                   </table>
                 </div>
@@ -4402,6 +4480,7 @@ const App = () => {
               const empList = Object.values(empMap).sort((a,b)=>a.name.localeCompare(b.name));
               return (
               <div key={_efKey} className="space-y-6">
+                {expenseLoading && <div className="text-center text-slate-400 py-12">載入中...</div>}
                 {/* 日期選擇 */}
                 <div className="bg-white p-6 rounded-3xl border shadow-sm flex items-center gap-4">
                   <h3 className="font-black text-lg text-slate-700">訂餐費用統計</h3>
@@ -4722,6 +4801,7 @@ const App = () => {
                 try { await api.updateCoffeeOrderStatus(id, {status}); } finally { delete coffeeUpdatingRef.current[id]; }
               };
               return (<div className="space-y-8">
+                {coffeeAdminLoading && <div className="text-center text-slate-400 py-12">載入中...</div>}
                 {/* KPI */}
                 <div className="grid grid-cols-2 md:grid-cols-6 gap-4">
                   <div className="bg-amber-700 text-white p-4 rounded-2xl"><div className="text-xs font-bold text-amber-200">總杯數</div><div className="text-2xl font-black mt-1">{totalCups} 杯</div></div>
@@ -4901,7 +4981,8 @@ const App = () => {
                       <th className="px-4 py-3 text-center text-sm font-black text-slate-700">操作</th>
                     </tr></thead>
                     <tbody className="divide-y">
-                      {meetings.length===0 && <tr><td colSpan={7} className="px-6 py-12 text-center text-slate-300">本月無活動</td></tr>}
+                      {meetingsLoading && <tr><td colSpan={7} className="px-6 py-12 text-center text-slate-400">載入中...</td></tr>}
+                      {!meetingsLoading && meetings.length===0 && <tr><td colSpan={7} className="px-6 py-12 text-center text-slate-300">本月無活動</td></tr>}
                       {meetings.map(m=>(
                         <tr key={m.id} className={'hover:bg-slate-50 '+(selectedMeeting&&selectedMeeting.id===m.id?'bg-blue-50':'')}>
                           <td className="px-4 py-3 font-bold text-slate-700">{m.date.slice(5).replace('-','/')}</td>
@@ -5331,7 +5412,7 @@ const App = () => {
 
       </>}
       {showUniformZone && activeZone==='uniform' && (()=>{
-        const locations = ['嘉義總部','新北A3','新竹','台中','台南','高雄'];
+        const locations = ['嘉義總部','新北A3','新竹','台中','台南','高雄','大陸'];
         const uf = uniformForm;
         const setUf = (k,v) => setUniformForm(prev=>({...prev,[k]:v}));
         const genderSizes = uniformSizes.filter(s=>s.gender===uf.gender);
@@ -5386,31 +5467,32 @@ const App = () => {
         <div className="p-4 md:p-6 pb-24 md:pb-6 flex gap-4">
           {/* 左側選單 */}
           <div className="w-44 shrink-0 space-y-1.5 sticky top-[72px] self-start">
-            {[{id:'apply',label:'申請制服'},{id:'receive',label:'簽收'},{id:'history',label:'歷史紀錄'},...(uniformRole!=='employee'?[{id:'admin',label:'管理後台'}]:[])].map(t=>(
-              <React.Fragment key={t.id}>
-                <button onClick={()=>{setUniformTab(t.id);if(t.id==='apply')setUniformStep(1);}} className={'w-full text-left px-4 py-3 rounded-xl text-base font-black transition-all relative '+(uniformTab===t.id?'bg-blue-900 text-white shadow':'bg-white text-slate-700 hover:text-slate-900 border')}>{t.label}{t.id==='receive' && uniformApps.filter(a=>a.status==='shipped').length>0 && <span className="absolute top-2 right-2 w-5 h-5 bg-red-500 text-white text-xs font-black rounded-full flex items-center justify-center">{uniformApps.filter(a=>a.status==='shipped').length}</span>}</button>
-                {t.id==='admin' && uniformTab==='admin' && uniformRole!=='employee' && (()=>{
-                  const ur = uniformRole;
-                  const subs = [
-                    ...(['hr','super_admin'].includes(ur)?[{id:'applications',label:'申請清單'},{id:'history_all',label:'歷史紀錄查詢'}]:[]),
-                    ...(['local_admin','super_admin'].includes(ur)?[{id:'shipping',label:'待發貨'}]:[]),
-                    ...(['warehouse','super_admin'].includes(ur)?[{id:'inventory',label:'庫存管理'},{id:'shortage',label:'缺貨調撥'}]:[]),
-                    ...(['procurement','super_admin'].includes(ur)?[{id:'alerts',label:'採購預警'}]:[]),
-                    ...(['general_affairs','super_admin'].includes(ur)?[{id:'overview',label:'據點總覽'}]:[]),
-                    ...(ur==='super_admin'?[{id:'permissions',label:'權限管理'}]:[]),
-                  ];
-                  return <div className="ml-3 mt-1 space-y-1">{subs.map(s=>(
-                    <button key={s.id} onClick={()=>setUniformAdminTab(s.id)} className={'w-full text-left px-3 py-2.5 rounded-lg text-sm font-black transition-all '+(uniformAdminTab===s.id?'bg-blue-100 text-blue-900':'text-slate-700 hover:text-slate-900')}>{s.label}</button>
-                  ))}</div>;
-                })()}
-              </React.Fragment>
+            {[
+              {id:'apply',label:'申請制服'},{id:'receive',label:'簽收'},{id:'history',label:'歷史紀錄'},
+              ...(uniformRole!=='employee'?[
+                {id:'_divider',label:'── 管理後台 ──'},
+                {id:'applications',label:'申請清單'},
+                {id:'shipping',label:'出貨管理'},
+                {id:'inventory',label:'庫存管理'},{id:'shortage',label:'缺貨調撥'},
+                {id:'alerts',label:'採購預警'},
+                {id:'overview',label:'據點總覽'},
+                {id:'history_all',label:'歷史紀錄查詢'},
+                {id:'permissions',label:'權限管理'},
+              ]:[]),
+            ].map(t=>(
+              t.id==='_divider' ? <div key={t.id} className="text-xs font-black text-slate-400 text-center py-2">{t.label}</div> :
+              <button key={t.id} onClick={()=>{
+                const adminIds=['applications','history_all','shipping','inventory','shortage','alerts','overview','permissions'];
+                if(adminIds.includes(t.id)){setUniformTab('admin');setUniformAdminTab(t.id);}
+                else{setUniformTab(t.id);if(t.id==='apply')setUniformStep(1);}
+              }} className={'w-full text-left px-4 py-3 rounded-xl text-sm font-black transition-all relative '+((uniformTab===t.id||(uniformTab==='admin'&&uniformAdminTab===t.id))?'bg-blue-900 text-white shadow':'bg-white text-slate-700 hover:text-slate-900 border')}>{t.label}{t.id==='receive' && uniformApps.filter(a=>a.status==='shipped').length>0 && <span className="absolute top-2 right-2 w-5 h-5 bg-red-500 text-white text-xs font-black rounded-full flex items-center justify-center">{uniformApps.filter(a=>a.status==='shipped').length}</span>}</button>
             ))}
           </div>
           {/* 右側內容 */}
           <div className="flex-1 min-w-0 space-y-4">
 
           {/* 待簽收提醒 */}
-          {uniformTab!=='receive' && uniformApps.filter(a=>a.status==='shipped').length>0 && (
+          {uniformTab!=='receive' && uniformTab!=='admin' && uniformApps.filter(a=>a.status==='shipped').length>0 && (
             <div onClick={()=>setUniformTab('receive')} className="p-3 bg-amber-50 border border-amber-200 rounded-xl flex items-center justify-between cursor-pointer hover:bg-amber-100 transition-colors">
               <div className="text-sm font-black text-amber-700">您有 {uniformApps.filter(a=>a.status==='shipped').length} 筆制服待簽收</div>
               <span className="text-sm font-black text-amber-500">前往簽收 &rarr;</span>
@@ -5594,14 +5676,17 @@ const App = () => {
 
           {/* 管理後台 */}
           {uniformTab==='admin' && uniformRole!=='employee' && (()=>{
-            const ur = uniformRole;
+            const _locF = uniformRole==='local_admin' && uniformLocation ? uniformLocation : null;
+            const reloadApps = ()=>api.getUniformApps({location:_locF}).then(setUniformAllApps).catch(()=>{});
+            const reloadInv = ()=>api.getUniformInventory({location:_locF,include_hq:_locF?'true':''}).then(setUniformInventory).catch(()=>{});
             const adminTabs = [
-              ...(['hr','super_admin'].includes(ur)?[{id:'applications',label:'申請清單'},{id:'history_all',label:'歷史紀錄查詢'}]:[]),
-              ...(['local_admin','super_admin'].includes(ur)?[{id:'shipping',label:'待發貨'}]:[]),
-              ...(['warehouse','super_admin'].includes(ur)?[{id:'inventory',label:'庫存管理'},{id:'shortage',label:'缺貨調撥'}]:[]),
-              ...(['procurement','super_admin'].includes(ur)?[{id:'alerts',label:'採購預警'}]:[]),
-              ...(['general_affairs','super_admin'].includes(ur)?[{id:'overview',label:'據點總覽'}]:[]),
-              ...(ur==='super_admin'?[{id:'permissions',label:'權限管理'}]:[]),
+              {id:'applications',label:'申請清單'},
+              {id:'shipping',label:'出貨管理'},
+              {id:'inventory',label:'庫存管理'},{id:'shortage',label:'缺貨調撥'},
+              {id:'alerts',label:'採購預警'},
+              {id:'overview',label:'據點總覽'},
+              {id:'history_all',label:'歷史紀錄查詢'},
+              {id:'permissions',label:'權限管理'},
             ];
             if (adminTabs.length && !adminTabs.find(t=>t.id===uniformAdminTab)) setUniformAdminTab(adminTabs[0].id);
             return <>
@@ -5633,10 +5718,10 @@ const App = () => {
                         </div>
                         <div className="flex gap-2 pt-1">
                           {a.status==='pending' && <>
-                            <button onClick={async()=>{if(!confirm('核准 '+a.emp_name+' 的申請？'))return;await api.updateUniformApp(a.id,{status:'approved',approved_by:empInfo.name});api.getUniformApps({}).then(setUniformAllApps);}} className="px-3 py-1.5 bg-blue-600 text-white rounded-lg text-xs font-black">核准 Approve</button>
-                            <button onClick={async()=>{const r=prompt('駁回原因 Reject reason:');if(r===null)return;await api.updateUniformApp(a.id,{status:'rejected',remarks:r});api.getUniformApps({}).then(setUniformAllApps);}} className="px-3 py-1.5 bg-red-50 text-red-500 rounded-lg text-xs font-black">駁回 Reject</button>
+                            <button onClick={async()=>{if(!confirm('核准 '+a.emp_name+' 的申請？'))return;await api.updateUniformApp(a.id,{status:'approved',approved_by:empInfo.name});reloadApps();}} className="px-3 py-1.5 bg-blue-600 text-white rounded-lg text-xs font-black">核准 Approve</button>
+                            <button onClick={async()=>{const r=prompt('駁回原因 Reject reason:');if(r===null)return;await api.updateUniformApp(a.id,{status:'rejected',remarks:r});reloadApps();}} className="px-3 py-1.5 bg-red-50 text-red-500 rounded-lg text-xs font-black">駁回 Reject</button>
                           </>}
-                          {a.status==='approved' && <button onClick={async()=>{if(!confirm('標記 '+a.emp_name+' 已出貨？'))return;await api.updateUniformApp(a.id,{status:'shipped',shipped_by:empInfo.name});api.getUniformApps({}).then(setUniformAllApps);}} className="px-3 py-1.5 bg-purple-600 text-white rounded-lg text-xs font-black">標記已出貨 Ship</button>}
+                          {a.status==='approved' && <button onClick={async()=>{if(!confirm('標記 '+a.emp_name+' 已出貨？'))return;await api.shipAndDeduct(a.id,empInfo.name);reloadApps();reloadInv();}} className="px-3 py-1.5 bg-purple-600 text-white rounded-lg text-xs font-black">標記已出貨 Ship</button>}
                           {a.status==='shipped' && <span className="text-xs text-purple-500 font-bold">等待簽收中</span>}
                           {a.status==='received' && <span className="text-xs text-green-600 font-bold">已簽收 {a.received_at?.slice(0,10)}</span>}
                         </div>
@@ -5651,6 +5736,40 @@ const App = () => {
             {/* 庫存管理 */}
             {uniformAdminTab==='inventory' && (
               <div className="space-y-4">
+                {/* 新增庫存 */}
+                {(()=>{
+                  const itemTypes = [{id:'shirt_long',label:'襯衫長袖'},{id:'shirt_short',label:'襯衫短袖'},{id:'polo_long',label:'POLO長袖'},{id:'polo_short',label:'POLO短袖'},{id:'blazer',label:'西裝外套'},{id:'jacket',label:'夾克'}];
+                  const sizes = ['XS','S','M','L','XL','2XL','3XL'];
+                  const ai = uniformAddInv;
+                  return <>
+                    <button onClick={()=>{setUniformShowAddInv(!uniformShowAddInv);if(!uniformShowAddInv)setUniformAddInv({location:_locF||locations[0],item_type:'shirt_long',size:'M',quantity:0});}} className="px-4 py-2 bg-blue-600 text-white rounded-xl text-sm font-black">{uniformShowAddInv?'收起':'+ 新增庫存'}</button>
+                    {uniformShowAddInv && (
+                      <div className="bg-white rounded-3xl border shadow-sm p-4 space-y-3">
+                        <div className="grid grid-cols-2 gap-3">
+                          <div className="space-y-1">
+                            <label className="text-sm font-black text-slate-400">據點</label>
+                            <select value={ai.location} onChange={e=>setUniformAddInv({...ai,location:e.target.value})} className="w-full p-2.5 bg-slate-50 rounded-xl text-sm font-bold outline-none">{locations.map(l=><option key={l} value={l}>{l}</option>)}</select>
+                          </div>
+                          <div className="space-y-1">
+                            <label className="text-sm font-black text-slate-400">品類</label>
+                            <select value={ai.item_type} onChange={e=>setUniformAddInv({...ai,item_type:e.target.value})} className="w-full p-2.5 bg-slate-50 rounded-xl text-sm font-bold outline-none">{itemTypes.map(t=><option key={t.id} value={t.id}>{t.label}</option>)}</select>
+                          </div>
+                          <div className="space-y-1">
+                            <label className="text-sm font-black text-slate-400">尺寸</label>
+                            <select value={ai.size} onChange={e=>setUniformAddInv({...ai,size:e.target.value})} className="w-full p-2.5 bg-slate-50 rounded-xl text-sm font-bold outline-none">{sizes.map(s=><option key={s} value={s}>{s}</option>)}</select>
+                          </div>
+                          <div className="space-y-1">
+                            <label className="text-sm font-black text-slate-400">數量</label>
+                            <input type="number" value={ai.quantity} onChange={e=>setUniformAddInv({...ai,quantity:parseInt(e.target.value)||0})} className="w-full p-2.5 bg-slate-50 rounded-xl text-sm font-bold outline-none"/>
+                          </div>
+                        </div>
+                        <button onClick={async()=>{await api.createInventory(ai.location,ai.item_type,ai.size,ai.quantity);reloadInv();setUniformShowAddInv(false);alert('庫存已新增');}} className="px-4 py-2 bg-blue-600 text-white rounded-xl text-sm font-black">確認新增</button>
+                      </div>
+                    )}
+                  </>;
+                })()}
+
+                {/* 庫存列表 */}
                 {(()=>{
                   const itemTypeLabels = {shirt_long:'襯衫長袖',shirt_short:'襯衫短袖',polo_long:'POLO長袖',polo_short:'POLO短袖',blazer:'西裝外套',jacket:'夾克'};
                   const grouped = {};
@@ -5670,10 +5789,27 @@ const App = () => {
                               <div key={size} className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-50 rounded-lg">
                                 <span className="text-sm font-black text-slate-700">{size}</span>
                                 <span className={'text-sm font-bold '+(inv.quantity<=0?'text-red-500':inv.quantity<=5?'text-amber-600':'text-slate-500')}>{inv.quantity}</span>
-                                <button onClick={async()=>{const q=prompt('調整數量（正=入庫 負=出庫）:');if(!q)return;const n=parseInt(q);if(isNaN(n))return;const r=prompt('原因:')||'';await api.adjustInventory(inv.id,n,r,empInfo.name);api.getUniformInventory({}).then(setUniformInventory);}} className="text-xs text-blue-500 font-bold hover:underline">調整</button>
+                                <button onClick={async()=>{const q=prompt('調整數量（正=入庫 負=出庫）:');if(!q)return;const n=parseInt(q);if(isNaN(n))return;const r=prompt('原因:')||'';await api.adjustInventory(inv.id,n,r,empInfo.name);reloadInv();}} className="text-xs text-blue-500 font-bold hover:underline">調整</button>
+                                <button onClick={async()=>{if(uniformInvLogId===inv.id){setUniformInvLogId(null);setUniformInvLogs([]);return;}setUniformInvLogId(inv.id);const logs=await api.getInventoryLogs(inv.id);setUniformInvLogs(logs);}} className="text-xs text-slate-400 font-bold hover:underline">{uniformInvLogId===inv.id?'收起紀錄':'紀錄'}</button>
                               </div>
                             ))}
                           </div>
+                          {/* 異動紀錄 */}
+                          {Object.entries(sizes).some(([,inv])=>uniformInvLogId===inv.id) && uniformInvLogs.length>0 && (
+                            <div className="px-6 py-2 bg-blue-50 border-t">
+                              <div className="text-xs font-black text-blue-700 mb-1">異動紀錄</div>
+                              <div className="space-y-1 max-h-40 overflow-y-auto">
+                                {uniformInvLogs.map(l=>(
+                                  <div key={l.id} className="flex items-center gap-2 text-xs">
+                                    <span className="text-slate-400">{l.created_at?.slice(0,16)}</span>
+                                    <span className={'font-bold '+(l.change_qty>0?'text-green-600':'text-red-500')}>{l.change_qty>0?'+':''}{l.change_qty}</span>
+                                    <span className="text-slate-600">{l.reason}</span>
+                                    <span className="text-slate-400">{l.operator}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
                         </div>
                       ))}
                     </div>
@@ -5710,13 +5846,35 @@ const App = () => {
               </div>
             )}
 
-            {/* 待發貨 (local_admin / super_admin) */}
-            {uniformAdminTab==='shipping' && (<div className="space-y-4">
-              {/* 待發貨 */}
+            {/* 出貨管理 */}
+            {uniformAdminTab==='shipping' && (()=>{
+              // 庫存查詢 helper
+              const getInvQty = (loc, itemType, size) => {
+                const inv = uniformInventory.find(i=>i.location===loc && i.item_type===itemType && i.size===size);
+                return inv ? inv.quantity : 0;
+              };
+              const hasStock = (a) => {
+                const prefix = a.uniform_type==='A_shirt'?'shirt':'polo';
+                if (a.long_sleeve_qty > 0 && getInvQty(a.location, prefix+'_long', a.selected_size) < a.long_sleeve_qty) return false;
+                if (a.short_sleeve_qty > 0 && getInvQty(a.location, prefix+'_short', a.selected_size) < a.short_sleeve_qty) return false;
+                if (a.outerwear_qty > 0 && getInvQty(a.location, a.outerwear_type, a.selected_size) < a.outerwear_qty) return false;
+                return true;
+              };
+              const approved = uniformAllApps.filter(a=>a.status==='approved');
+              const inStock = approved.filter(a=>hasStock(a));
+              const outOfStock = approved.filter(a=>!hasStock(a));
+              return <div className="space-y-4">
+              {/* 庫存不足提示 */}
+              {outOfStock.length>0 && (
+                <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-sm font-black text-amber-700">
+                  {outOfStock.length} 筆申請庫存不足，請至「缺貨調撥」處理
+                </div>
+              )}
+              {/* 待發貨（庫存足夠） */}
               <div className="bg-white rounded-3xl border shadow-sm overflow-hidden">
-                <div className="px-6 py-3 bg-slate-50 border-b font-black text-sm text-slate-700">待發貨 Pending Shipment ({uniformAllApps.filter(a=>a.status==='approved').length})</div>
+                <div className="px-6 py-3 bg-slate-50 border-b font-black text-sm text-slate-700">待發貨 Pending Shipment ({inStock.length})</div>
                 <div className="divide-y">
-                  {uniformAllApps.filter(a=>a.status==='approved').map(a=>(
+                  {inStock.map(a=>(
                     <div key={a.id} className="p-4 space-y-2">
                       <div className="flex items-center justify-between">
                         <div>
@@ -5728,10 +5886,10 @@ const App = () => {
                       <div className="text-sm text-slate-600">
                         {a.uniform_type==='A_shirt'?'襯衫':'POLO衫'} {a.selected_size} | 長袖 {a.long_sleeve_qty} + 短袖 {a.short_sleeve_qty} | {a.outerwear_type==='blazer'?'西裝外套×1':'夾克×2'}
                       </div>
-                      <button onClick={async()=>{if(!confirm('標記 '+a.emp_name+' 已出貨？'))return;await api.updateUniformApp(a.id,{status:'shipped',shipped_by:empInfo.name});api.getUniformApps({}).then(setUniformAllApps);}} className="px-3 py-1.5 bg-purple-600 text-white rounded-lg text-xs font-black">標記已出貨 Ship</button>
+                      <button onClick={async()=>{if(!confirm('標記 '+a.emp_name+' 已出貨？'))return;await api.shipAndDeduct(a.id,empInfo.name);reloadApps();reloadInv();}} className="px-3 py-1.5 bg-purple-600 text-white rounded-lg text-xs font-black">標記已出貨 Ship</button>
                     </div>
                   ))}
-                  {uniformAllApps.filter(a=>a.status==='approved').length===0 && <div className="py-8 text-center text-slate-300 text-sm">目前沒有待發貨的申請</div>}
+                  {inStock.length===0 && <div className="py-8 text-center text-slate-300 text-sm">目前沒有待發貨的申請</div>}
                 </div>
               </div>
               {/* 已出貨（等待簽收） */}
@@ -5768,7 +5926,7 @@ const App = () => {
                   {uniformAllApps.filter(a=>a.status==='received').length===0 && <div className="py-8 text-center text-slate-300 text-sm">目前沒有已簽收的紀錄</div>}
                 </div>
               </div>
-            </div>)}
+            </div>})()}
 
             {/* 權限管理 (super_admin) */}
             {/* 歷史紀錄查詢 (HR) — 查所有員工領用明細 */}
@@ -5804,35 +5962,58 @@ const App = () => {
             )}
 
             {/* 缺貨調撥 (Warehouse) — 庫存不足需要從嘉義總庫調撥的項目 */}
-            {uniformAdminTab==='shortage' && (
-              <div className="bg-white rounded-3xl border shadow-sm overflow-hidden">
-                <div className="px-6 py-3 bg-amber-50 border-b font-black text-sm text-amber-700">缺貨調撥 Shortage & Transfer</div>
+            {uniformAdminTab==='shortage' && (()=>{
+              const getInvQty = (loc, itemType, size) => {
+                const inv = uniformInventory.find(i=>i.location===loc && i.item_type===itemType && i.size===size);
+                return inv ? inv.quantity : 0;
+              };
+              const hasStock = (a) => {
+                const prefix = a.uniform_type==='A_shirt'?'shirt':'polo';
+                if (a.long_sleeve_qty > 0 && getInvQty(a.location, prefix+'_long', a.selected_size) < a.long_sleeve_qty) return false;
+                if (a.short_sleeve_qty > 0 && getInvQty(a.location, prefix+'_short', a.selected_size) < a.short_sleeve_qty) return false;
+                if (a.outerwear_qty > 0 && getInvQty(a.location, a.outerwear_type, a.selected_size) < a.outerwear_qty) return false;
+                return true;
+              };
+              const shortage = uniformAllApps.filter(a=>a.status==='approved' && !hasStock(a));
+              const byLoc = {};
+              shortage.forEach(a=>{if(!byLoc[a.location])byLoc[a.location]=[];byLoc[a.location].push(a);});
+              const itemTypeLabels = {shirt_long:'襯衫長袖',shirt_short:'襯衫短袖',polo_long:'POLO長袖',polo_short:'POLO短袖',blazer:'西裝外套',jacket:'夾克'};
+              return <div className="bg-white rounded-3xl border shadow-sm overflow-hidden">
+                <div className="px-6 py-3 bg-amber-50 border-b font-black text-sm text-amber-700">缺貨調撥 Shortage & Transfer ({shortage.length})</div>
                 <div className="divide-y">
-                  {(()=>{
-                    // 找出已核准但當地庫存不足的申請
-                    const pending = uniformAllApps.filter(a=>a.status==='approved');
-                    if (!pending.length) return <div className="py-12 text-center text-slate-300 text-sm">目前沒有需要調撥的項目</div>;
-                    // 按據點分組
-                    const byLoc = {};
-                    pending.forEach(a=>{if(!byLoc[a.location])byLoc[a.location]=[];byLoc[a.location].push(a);});
-                    return Object.entries(byLoc).map(([loc, apps])=>(
-                      <div key={loc} className="p-4 space-y-2">
-                        <div className="font-black text-slate-700">{loc} <span className="text-xs text-slate-400">({apps.length} 筆待發)</span></div>
-                        {apps.map(a=>(
-                          <div key={a.id} className="ml-4 flex items-center justify-between text-sm">
-                            <div>
-                              <span className="font-bold text-slate-700">{a.emp_name}</span>
-                              <span className="text-slate-500 ml-2">{a.uniform_type==='A_shirt'?'襯衫':'POLO衫'} {a.selected_size} | 長袖{a.long_sleeve_qty} 短袖{a.short_sleeve_qty}</span>
+                  {shortage.length===0 ? <div className="py-12 text-center text-green-500 text-sm font-bold">所有申請庫存充足，無需調撥</div> :
+                    Object.entries(byLoc).map(([loc, apps])=>(
+                      <div key={loc} className="p-4 space-y-3">
+                        <div className="font-black text-slate-700">{loc} <span className="text-xs text-red-500">({apps.length} 筆庫存不足)</span></div>
+                        {apps.map(a=>{
+                          const prefix = a.uniform_type==='A_shirt'?'shirt':'polo';
+                          const needs = [];
+                          if(a.long_sleeve_qty>0) needs.push({type:prefix+'_long',need:a.long_sleeve_qty,have:getInvQty(a.location,prefix+'_long',a.selected_size)});
+                          if(a.short_sleeve_qty>0) needs.push({type:prefix+'_short',need:a.short_sleeve_qty,have:getInvQty(a.location,prefix+'_short',a.selected_size)});
+                          if(a.outerwear_qty>0) needs.push({type:a.outerwear_type,need:a.outerwear_qty,have:getInvQty(a.location,a.outerwear_type,a.selected_size)});
+                          return <div key={a.id} className="ml-4 p-3 bg-amber-50 rounded-xl space-y-1">
+                            <div className="flex items-center justify-between">
+                              <div>
+                                <span className="font-bold text-slate-700">{a.emp_name}</span>
+                                <span className="text-xs text-slate-400 ml-2">{a.emp_id} | {a.selected_size}</span>
+                              </div>
+                              <button onClick={async()=>{if(!confirm('從嘉義總庫調撥並標記 '+a.emp_name+' 已出貨？'))return;await api.shipAndDeduct(a.id,empInfo.name+' (總庫調撥)');reloadApps();reloadInv();}} className="px-3 py-1 bg-amber-500 text-white rounded-lg text-xs font-black shrink-0">調撥出貨</button>
                             </div>
-                            <button onClick={async()=>{if(!confirm('從嘉義總庫調撥並標記 '+a.emp_name+' 已出貨？'))return;await api.updateUniformApp(a.id,{status:'shipped',shipped_by:empInfo.name+' (總庫調撥)'});api.getUniformApps({}).then(setUniformAllApps);}} className="px-3 py-1 bg-amber-500 text-white rounded-lg text-xs font-black shrink-0">調撥出貨</button>
-                          </div>
-                        ))}
+                            <div className="flex flex-wrap gap-2">
+                              {needs.map(n=>(
+                                <span key={n.type} className={'text-xs px-2 py-0.5 rounded '+(n.have<n.need?'bg-red-100 text-red-600':'bg-green-100 text-green-600')}>
+                                  {itemTypeLabels[n.type]||n.type}: 需{n.need} / 庫存{n.have}
+                                </span>
+                              ))}
+                            </div>
+                          </div>;
+                        })}
                       </div>
-                    ));
-                  })()}
+                    ))
+                  }
                 </div>
-              </div>
-            )}
+              </div>;
+            })()}
 
             {/* 據點總覽 (General Affairs) — 各據點庫存與發放狀況 */}
             {uniformAdminTab==='overview' && (
@@ -5933,6 +6114,7 @@ const App = () => {
                           <button onClick={async()=>{
                             if(uniformNewRole==='local_admin'&&!uniformNewLoc)return alert('請選擇據點');
                             await api.createUniformRole({emp_id:sel.account_id,emp_name:sel.name,role:uniformNewRole,location:uniformNewRole==='local_admin'?uniformNewLoc:null});
+                            if(sel.account_id===empInfo.id){setUniformRole(uniformNewRole);setUniformLocation(uniformNewRole==='local_admin'?uniformNewLoc:null);}
                             setUniformRoleSearch('');setUniformRoleResults([]);setUniformNewRole('hr');setUniformNewLoc('');
                             api.getUniformRoles().then(setUniformAllRoles);
                             alert('角色已設定');
@@ -5949,15 +6131,45 @@ const App = () => {
                     {(()=>{
                       const roleLabels = {hr:'人資 HR',local_admin:'當地窗口',warehouse:'嘉義總庫/生管',procurement:'採購',general_affairs:'總務',super_admin:'系統管理員'};
                       const roleColors = {hr:'blue',local_admin:'purple',warehouse:'amber',procurement:'emerald',general_affairs:'slate',super_admin:'red'};
+                      const roleOptions = [{id:'hr',label:'人資 HR'},{id:'local_admin',label:'當地窗口 Local Admin'},{id:'warehouse',label:'嘉義總庫/生管 Warehouse'},{id:'procurement',label:'採購 Procurement'},{id:'general_affairs',label:'總務 General Affairs'},{id:'super_admin',label:'系統管理員 Super Admin'}];
                       return uniformAllRoles.map(r=>(
-                        <div key={r.id} className="px-4 py-3 flex items-center justify-between">
-                          <div className="flex items-center gap-2">
-                            <span className="text-sm font-black text-slate-700">{r.emp_name}</span>
-                            <span className="text-xs text-slate-400">{r.emp_id}</span>
-                            <span className={'px-2 py-0.5 rounded-full text-xs font-black bg-'+(roleColors[r.role]||'slate')+'-50 text-'+(roleColors[r.role]||'slate')+'-700'}>{roleLabels[r.role]||r.role}</span>
-                            {r.location && <span className="text-xs text-slate-400">{r.location}</span>}
-                          </div>
-                          <button onClick={async()=>{if(!confirm('移除 '+r.emp_name+' 的角色？'))return;await api.deleteUniformRole(r.id);api.getUniformRoles().then(setUniformAllRoles);}} className="text-red-400 hover:text-red-600 text-xs font-black">移除</button>
+                        <div key={r.id} className="px-4 py-3">
+                          {uniformEditRole && uniformEditRole.id===r.id ? (
+                            <div className="space-y-2">
+                              <div className="text-sm font-black text-slate-700">{r.emp_name} <span className="text-xs text-slate-400">{r.emp_id}</span></div>
+                              <select value={uniformEditRole.role} onChange={e=>setUniformEditRole({...uniformEditRole,role:e.target.value,location:e.target.value==='local_admin'?uniformEditRole.location:''})} className="w-full p-2.5 bg-slate-50 rounded-xl text-sm font-bold border-none outline-none">
+                                {roleOptions.map(o=><option key={o.id} value={o.id}>{o.label}</option>)}
+                              </select>
+                              {uniformEditRole.role==='local_admin' && (
+                                <select value={uniformEditRole.location||''} onChange={e=>setUniformEditRole({...uniformEditRole,location:e.target.value})} className="w-full p-2.5 bg-slate-50 rounded-xl text-sm font-bold border-none outline-none">
+                                  <option value="">請選擇據點</option>
+                                  {locations.map(l=><option key={l} value={l}>{l}</option>)}
+                                </select>
+                              )}
+                              <div className="flex gap-2">
+                                <button onClick={async()=>{
+                                  if(uniformEditRole.role==='local_admin'&&!uniformEditRole.location)return alert('請選擇據點');
+                                  await api.createUniformRole({emp_id:r.emp_id,emp_name:r.emp_name,role:uniformEditRole.role,location:uniformEditRole.role==='local_admin'?uniformEditRole.location:null});
+                                  if(r.emp_id===empInfo.id){setUniformRole(uniformEditRole.role);setUniformLocation(uniformEditRole.role==='local_admin'?uniformEditRole.location:null);}
+                                  setUniformEditRole(null);api.getUniformRoles().then(setUniformAllRoles);
+                                }} className="px-3 py-1.5 bg-blue-600 text-white rounded-lg text-xs font-black">儲存</button>
+                                <button onClick={()=>setUniformEditRole(null)} className="px-3 py-1.5 text-slate-400 text-xs font-black">取消</button>
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="flex items-center justify-between">
+                              <div className="flex items-center gap-2">
+                                <span className="text-sm font-black text-slate-700">{r.emp_name}</span>
+                                <span className="text-xs text-slate-400">{r.emp_id}</span>
+                                <span className={'px-2 py-0.5 rounded-full text-xs font-black bg-'+(roleColors[r.role]||'slate')+'-50 text-'+(roleColors[r.role]||'slate')+'-700'}>{roleLabels[r.role]||r.role}</span>
+                                {r.location && <span className="text-xs text-slate-400">{r.location}</span>}
+                              </div>
+                              <div className="flex gap-2">
+                                <button onClick={()=>setUniformEditRole({id:r.id,role:r.role,location:r.location||''})} className="text-blue-400 hover:text-blue-600 text-xs font-black">編輯</button>
+                                <button onClick={async()=>{if(!confirm('移除 '+r.emp_name+' 的角色？'))return;await api.deleteUniformRole(r.id);if(r.emp_id===empInfo.id){setUniformRole('employee');setUniformLocation(null);}api.getUniformRoles().then(setUniformAllRoles);}} className="text-red-400 hover:text-red-600 text-xs font-black">移除</button>
+                              </div>
+                            </div>
+                          )}
                         </div>
                       ));
                     })()}
