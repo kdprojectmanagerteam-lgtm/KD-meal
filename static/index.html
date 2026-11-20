@@ -748,6 +748,7 @@ const App = () => {
   // 訂餐費用統計
   const [expenseCoffeeOrders, setExpenseCoffeeOrders] = useState([]);
   const [expenseRefresh, setExpenseRefresh] = useState(0);
+  const [guestExportModal, setGuestExportModal] = useState(null); // {start, end}
   const reloadExpense = () => {
     api.getOrders({ date: expenseDate }).then(setExpenseOrders).catch(()=>setExpenseOrders([]));
     api.getExtraFees({ date: expenseDate }).then(setExtraFees).catch(()=>setExtraFees([]));
@@ -4761,12 +4762,38 @@ const App = () => {
                     window.open(link);
                   }} className="px-8 py-3 bg-amber-400 text-slate-700 rounded-xl font-black text-sm hover:bg-amber-500 transition-colors inline-flex items-center gap-2"><Icon name="download" size={16}/> 匯出同仁晚餐明細</button>
                   <button onClick={()=>{
-                    const link = '/api/export/guest-detail?month='+expenseDate.slice(0,7);
-                    window.open(link);
+                    const m = expenseDate.slice(0,7);
+                    const [y,mo] = m.split('-').map(Number);
+                    const defStart = mo===1 ? `${y-1}-12-21` : `${y}-${String(mo-1).padStart(2,'0')}-21`;
+                    const defEnd = `${y}-${String(mo).padStart(2,'0')}-20`;
+                    setGuestExportModal({start:defStart, end:defEnd});
                   }} className="px-8 py-3 bg-orange-100 text-orange-700 rounded-xl font-black text-sm hover:bg-orange-200 transition-colors inline-flex items-center gap-2 border border-orange-200"><Icon name="download" size={16}/> 匯出來客/廠商明細</button>
                 </div>
                 <p className="text-center text-sm text-amber-600 mt-2">※ 薪資週期為上月26日～本月25日，26日後的訂餐紀錄請將日期切換至下個月再匯出</p>
-                <p className="text-center text-sm text-amber-600 mt-1">※ 來客/廠商明細區間為上月21日～本月20日</p>
+                {guestExportModal && <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50" onClick={()=>setGuestExportModal(null)}>
+                  <div className="bg-white rounded-2xl p-6 w-96 shadow-xl" onClick={e=>e.stopPropagation()}>
+                    <h3 className="font-black text-lg text-slate-700 mb-4">匯出來客/廠商明細</h3>
+                    <div className="space-y-3">
+                      <div className="flex items-center gap-3">
+                        <label className="text-sm font-bold text-slate-600 w-16 shrink-0">起始日</label>
+                        <input type="date" value={guestExportModal.start} onChange={e=>setGuestExportModal(p=>({...p,start:e.target.value}))} className="flex-1 border rounded-lg px-3 py-2 text-sm outline-none focus:border-blue-400"/>
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <label className="text-sm font-bold text-slate-600 w-16 shrink-0">結束日</label>
+                        <input type="date" value={guestExportModal.end} onChange={e=>setGuestExportModal(p=>({...p,end:e.target.value}))} className="flex-1 border rounded-lg px-3 py-2 text-sm outline-none focus:border-blue-400"/>
+                      </div>
+                      <p className="text-xs text-slate-400">預設區間為上月21日～本月20日，可自行調整</p>
+                    </div>
+                    <div className="flex justify-end gap-3 mt-5">
+                      <button onClick={()=>setGuestExportModal(null)} className="px-5 py-2.5 text-sm text-blue-600 font-bold rounded-lg hover:bg-slate-50">取消</button>
+                      <button onClick={()=>{
+                        const link = '/api/export/guest-detail?month='+expenseDate.slice(0,7)+'&start_date='+guestExportModal.start+'&end_date='+guestExportModal.end;
+                        window.open(link);
+                        setGuestExportModal(null);
+                      }} className="px-5 py-2.5 text-sm bg-orange-500 text-white font-black rounded-lg hover:bg-orange-600">匯出</button>
+                    </div>
+                  </div>
+                </div>}
               </div>);
             })()}
 

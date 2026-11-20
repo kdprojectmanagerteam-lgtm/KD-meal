@@ -2410,19 +2410,21 @@ def export_dinner_detail(month: str, db: Session = Depends(get_db)):
 
 
 @app.get("/api/export/guest-detail")
-def export_guest_detail(month: str, db: Session = Depends(get_db)):
-    """匯出來客/廠商明細 - 薪資週期：上月26~本月25"""
+def export_guest_detail(month: str, start_date: str | None = None, end_date: str | None = None, db: Session = Depends(get_db)):
+    """匯出來客/廠商明細 - 可自訂區間，預設上月21~本月20"""
     from urllib.parse import quote
     import re
 
-    year = int(month.split("-")[0])
-    mon = int(month.split("-")[1])
-
-    if mon == 1:
-        start_date = f"{year-1}-12-21"
+    if start_date and end_date:
+        pass  # 使用自訂區間
     else:
-        start_date = f"{year}-{str(mon-1).zfill(2)}-21"
-    end_date = f"{year}-{str(mon).zfill(2)}-20"
+        year = int(month.split("-")[0])
+        mon = int(month.split("-")[1])
+        if mon == 1:
+            start_date = f"{year-1}-12-21"
+        else:
+            start_date = f"{year}-{str(mon-1).zfill(2)}-21"
+        end_date = f"{year}-{str(mon).zfill(2)}-20"
 
     orders = db.query(Order).filter(
         Order.date >= start_date,
