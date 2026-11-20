@@ -1158,14 +1158,13 @@ const App = () => {
         const items = empItems.map(c=>{
           let price = c.price;
           if (c.type==='飲料') {
-            const tpSel=drinkSelections[c.orderDate]?.toppings||[];
-            if (tpSel.length>0) {
-              const allToppings=drinkOptions.filter(o=>o.date===c.orderDate).flatMap(o=>o.toppings||[]);
-              const tpTotal=tpSel.reduce((s,n)=>{const t=allToppings.find(x=>x.name===n);return s+(t?t.price:0);},0);
-              const baseMatch=c.name.match(/\$(\d+)/);
-              const basePrice=baseMatch?parseInt(baseMatch[1]):(c._basePrice||c.price);
-              price=basePrice+tpTotal;
-            }
+            // 從 remarks 解析加料費，確保 price 一定包含加料（不依賴 drinkSelections 狀態）
+            const baseMatch=c.name.match(/\$(\d+)/);
+            const basePrice=baseMatch?parseInt(baseMatch[1]):(c._basePrice||c.price);
+            const allToppings=drinkOptions.filter(o=>o.date===c.orderDate).flatMap(o=>o.toppings||[]);
+            const tpTotal=allToppings.filter(t=>c.remarks&&c.remarks.includes(t.name)).reduce((s,t)=>s+t.price,0);
+            const expected=basePrice+tpTotal;
+            if(price<expected) price=expected;
           }
           if (c.type==='早餐' && c.remarks) {
             const baseMatch=c.name.match(/\$(\d+)/);const basePrice=baseMatch?parseInt(baseMatch[1]):0;
@@ -1206,7 +1205,7 @@ const App = () => {
         for (const g of Object.values(guestGroups)) {
           const items = g.items.map(c=>{
             let price=c.price;
-            if(c.type==='飲料'){const tpSel=drinkSelections[c.orderDate]?.toppings||[];if(tpSel.length>0){const allTp=drinkOptions.filter(o=>o.date===c.orderDate).flatMap(o=>o.toppings||[]);const tpTotal=tpSel.reduce((s,n)=>{const t=allTp.find(x=>x.name===n);return s+(t?t.price:0);},0);const bm=c.name.match(/\$(\d+)/);price=(bm?parseInt(bm[1]):(c._basePrice||c.price))+tpTotal;}}
+            if(c.type==='飲料'){const bm=c.name.match(/\$(\d+)/);const bp=bm?parseInt(bm[1]):(c._basePrice||c.price);const allTp=drinkOptions.filter(o=>o.date===c.orderDate).flatMap(o=>o.toppings||[]);const tpT=allTp.filter(t=>c.remarks&&c.remarks.includes(t.name)).reduce((s,t)=>s+t.price,0);const exp=bp+tpT;if(price<exp)price=exp;}
             return {date:c.orderDate,type:c.type,item_name:c.name,qty:c.qty,price,remarks:c.remarks||'',self_paid:c.self_paid===1?1:0};
           });
           await api.createOrders({emp_id:g.company,emp_name:g.company,floor:empInfo.floor,company_name:g.company,guest_dept:g.dept,guest_qty:g.qty||1,proxy_by:empInfo.name,items});

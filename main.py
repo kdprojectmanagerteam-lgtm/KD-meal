@@ -1115,21 +1115,24 @@ def create_orders(data: OrderCreate, db: Session = Depends(get_db)):
             if existing_company or batch_company:
                 self_paid_val = 1
 
-        # 飲料加料費後端驗證：從 remarks 比對 drink_options 加料，確保 price 包含加料費
+        # 飲料加料費後端驗證：從 remarks 比對 drink_options 加料，強制重算 price = base + toppings
         final_price = item.get("price", 0)
-        if item["type"] == "飲料" and item.get("remarks", ""):
+        if item["type"] == "飲料":
             import re as _re2
             base_match = _re2.search(r'\$(\d+)', item["item_name"])
             if base_match:
                 base_price = int(base_match.group(1))
-                toppings = db.query(DrinkOption).filter(
-                    DrinkOption.date == item["date"],
-                    DrinkOption.option_type == "topping",
-                ).all()
-                topping_total = sum(t.price for t in toppings if t.name in item["remarks"])
-                expected = base_price + topping_total
-                if topping_total > 0 and final_price < expected:
-                    final_price = expected
+                remarks_str = item.get("remarks", "")
+                if remarks_str:
+                    toppings = db.query(DrinkOption).filter(
+                        DrinkOption.date == item["date"],
+                        DrinkOption.option_type == "topping",
+                    ).all()
+                    topping_total = sum(t.price for t in toppings if t.name in remarks_str)
+                    if topping_total > 0:
+                        final_price = base_price + topping_total
+                elif final_price < base_price:
+                    final_price = base_price
 
         order = Order(
             emp_id=data.emp_id,
